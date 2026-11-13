@@ -11,6 +11,8 @@ enum Proto {
     static let maxPayload = 8 * 1024 * 1024
     /// First four bytes ("SCRN") of the datagram the tablet sends to open the UDP path.
     static let udpMagic: UInt32 = 0x5343_524E
+    /// Shown in the menu and sent to the tablet (which logs it in test sessions).
+    static let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.2.0"
 }
 
 enum MsgType: UInt8 {
@@ -21,7 +23,7 @@ enum MsgType: UInt8 {
     case scroll = 5           // tablet -> mac, [dx f32][dy f32][x f32][y f32]
     case keyframeRequest = 6  // tablet -> mac
     case ping = 7             // tablet -> mac, opaque payload
-    case pong = 8             // mac -> tablet, same payload echoed
+    case pong = 8             // mac -> tablet, same payload echoed + [macClockMicros u64]
     case stats = 9            // tablet -> mac, [rttMicros u32][packetsExpected u32][packetsLost u32][framesLost u16][framesRendered u16]
     case zoom = 10            // tablet -> mac, [phase u8][delta f32][x f32][y f32]
     case key = 11             // tablet -> mac, [action u8][androidKeyCode u16][flags u8]
@@ -38,6 +40,8 @@ struct Hello: Decodable {
     let id: String?
     /// True when the tablet wants video over UDP (it is not connected through USB).
     let udp: Bool?
+    /// Tablet app version, for display.
+    let version: String?
 }
 
 struct StreamConfig: Encodable {
@@ -48,6 +52,9 @@ struct StreamConfig: Encodable {
     /// Non-zero when the Mac accepts UDP video: the tablet echoes it in its UDP hello.
     let token: UInt32
     let udpPort: Int
+    /// This Mac's name and app version.
+    let server: String
+    let version: String
 }
 
 enum Codec: String {

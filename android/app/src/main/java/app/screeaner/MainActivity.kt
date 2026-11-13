@@ -2,6 +2,7 @@ package app.screeaner
 
 import android.app.Activity
 import android.content.Context
+import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -20,6 +21,7 @@ import android.view.inputmethod.InputMethodManager
 import android.widget.Button
 import android.widget.EditText
 import android.widget.TextView
+import java.util.Locale
 import java.util.UUID
 import kotlin.math.abs
 import kotlin.math.hypot
@@ -37,7 +39,17 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
     private val handler = Handler(Looper.getMainLooper())
     private var client: StreamClient? = null
     private var refreshRate = 60f
-    private var showHud = false
+    private var hudMode = HUD_OFF
+    private lateinit var monitor: View
+    private lateinit var latencyText: TextView
+    private lateinit var performanceText: TextView
+    private lateinit var latencyGraph: GraphView
+    private lateinit var fpsGraph: GraphView
+    private lateinit var recordButton: Button
+    private lateinit var recordInfo: TextView
+    private lateinit var deviceMonitor: DeviceMonitor
+    private lateinit var recorder: SessionRecorder
+    private var appVersion = "?"
     @Volatile private var manualHost: String? = null
     private var deviceId = ""
     private var streaming = false
@@ -57,6 +69,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
         hud = findViewById(R.id.hud)
         hostInput = findViewById(R.id.hostInput)
         discovery = Discovery(applicationContext)
+        setUpMonitor()
 
         val prefs = getPreferences(Context.MODE_PRIVATE)
         manualHost = prefs.getString(PREF_HOST, null)
@@ -113,6 +126,142 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
         }
         return super.dispatchKeyEvent(event)
     }
+
+    // region Monitor, test sessions and version
+
+    private fun setUpMonitor() {
+        appVersion = try {
+            @Suppress("DEPRECATION")
+            val info = packageManager.getPackageInfo(packageName, 0)
+            @Suppress("DEPRECATION")
+            val code = if (Build.VERSION.SDK_INT >= 28) info.longVersionCode else info.versionCode.toLong()
+            "${info.versionName} ($code)"
+        } catch (e: Exception) {
+            "?"
+        }
+        val about = "Screeaner v$appVersion · Android ${Build.VERSION.RELEASE} · ${Build.MODEL}"
+        findViewById<TextView>(R.id.version).text = about
+
+        monitor = findViewById(R.id.monitor)
+        latencyText = findViewById(R.id.latencyText)
+        performanceText = findViewById(R.id.performanceText)
+        latencyGraph = findViewById(R.id.latencyGraph)
+        fpsGraph = findViewById(R.id.fpsGraph)
+        recordButton = findViewById(R.id.record)
+        recordInfo = findViewById(R.id.recordInfo)
+        findViewById<TextView>(R.id.monitorTitle).text = about
+        latencyGraph.configure(
+            "ms", 20f,
+            "total" to 0xFFFFFFFF.toInt(), "dec" to 0xFFFFB454.toInt(),
+            "rede" to 0xFF7CFFB2.toInt(), "enc" to 0xFF4F8CFF.toInt(),
+        )
+        fpsGraph.configure("fps", 30f, "fps" to 0xFF7CFFB2.toInt(), "Mbps" to 0xFF4F8CFF.toInt())
+
+        deviceMonitor = DeviceMonitor(applicationContext)
+        recorder = SessionRecorder(applicationContext)
+        recordButton.setOnClickListener { toggleRecording() }
+        findViewById<Button>(R.id.share).setOnClickListener { shareLastSession() }
+    }
+
+    private fun applyHudMode() {
+        hud.visibility = if (streaming && hudMode == HUD_COMPACT) View.VISIBLE else View.GONE
+        monitor.visibility = if (streaming && hudMode == HUD_FULL) View.VISIBLE else View.GONE
+    }
+
+    private fun toggleRecording() {
+        if (recorder.isRecording) {
+            stopRecording()
+            return
+        }
+        val info = client?.streamInfo
+        val setup = listOf(
+            "tablet: ${Build.MANUFACTURER} ${Build.MODEL} · Android ${Build.VERSION.RELEASE} · app $appVersion",
+            "mac: ${info?.macName ?: "?"} · app ${info?.macVersion ?: "?"}",
+            "stream: ${info?.width}x${info?.height} · ${info?.codec} · ${info?.fps} fps · painel ${refreshRate.roundToInt()} Hz",
+        )
+        if (recorder.start(setup)) {
+            recordButton.text = getString(R.string.record_stop, "0:00")
+            recordInfo.text = getString(R.string.record_hint)
+        } else {
+            recordInfo.text = getString(R.string.record_failed)
+        }
+    }
+
+    private fun stopRecording() {
+        val summary = recorder.stop() ?: return
+        recordButton.text = getString(R.string.record_start)
+        val where = summary.publicLocation ?: summary.file.absolutePath
+        recordInfo.text = getString(R.string.record_saved, where) + "\n" + summary.text
+    }
+
+    /** Sends the most recent recording as text, so no file permission is needed. */
+    private fun shareLastSession() {
+        if (recorder.isRecording) stopRecording()
+        val file = recorder.lastFile()
+        if (file == null) {
+            recordInfo.text = getString(R.string.record_none)
+            return
+        }
+        val text = try {
+            file.readText().take(MAX_SHARED_CHARS)
+        } catch (e: Exception) {
+            recordInfo.text = getString(R.string.record_failed)
+            return
+        }
+        val send = Intent(Intent.ACTION_SEND)
+            .setType("text/plain")
+            .putExtra(Intent.EXTRA_SUBJECT, file.name)
+            .putExtra(Intent.EXTRA_TEXT, text)
+        startActivity(Intent.createChooser(send, file.name))
+    }
+
+    private fun format(pattern: String, vararg args: Any) = String.format(Locale.US, pattern, *args)
+    private fun ms(value: Double) = if (value.isNaN()) "–" else format("%.1f", value)
+
+    private fun showSample(stream: StreamSample) {
+        val device = deviceMonitor.sample()
+        if (recorder.isRecording) {
+            recorder.append(stream, device)
+            val seconds = recorder.elapsedSeconds
+            recordButton.text = getString(R.string.record_stop, format("%d:%02d", seconds / 60, seconds % 60))
+        }
+
+        var compact = format(
+            "%s · %d fps · %.1f Mbps · latência %s ms (enc %.1f · rede %.1f · dec %.1f)",
+            stream.transport, stream.fps, stream.mbps, ms(stream.latencyAvgMs),
+            stream.encodeMs, stream.networkMs, stream.decodeAvgMs,
+        )
+        if (stream.packetLossPct >= 0.1) compact += format(" · perda %.1f%%", stream.packetLossPct)
+        if (recorder.isRecording) compact = "● $compact"
+        hud.text = compact
+        // Keep the history rolling even while the panel is hidden.
+        latencyGraph.push(
+            stream.latencyAvgMs.toFloat(), stream.decodeAvgMs.toFloat(),
+            stream.networkMs.toFloat(), stream.encodeMs.toFloat(),
+        )
+        fpsGraph.push(stream.fps.toFloat(), stream.mbps.toFloat())
+        if (hudMode != HUD_FULL) return
+
+        latencyText.text = format(
+            "Mac→tela  %s ms   (pico %s ms)\nencode %.1f · rede %.1f · decode %.1f (pico %.1f)",
+            ms(stream.latencyAvgMs), ms(stream.latencyMaxMs),
+            stream.encodeMs, stream.networkMs, stream.decodeAvgMs, stream.decodeMaxMs,
+        )
+        performanceText.text = format(
+            "%s · %d fps · %.1f Mbps · perda %.1f%%\nquadros perdidos %d · keyframes %d\n" +
+                "CPU %.0f%% · mem %.0f MB · bat %d%% %.1f°C · térmico %s",
+            stream.transport, stream.fps, stream.mbps, stream.packetLossPct,
+            stream.framesLost, stream.keyframeRequests,
+            device.cpuPct, device.memoryMb, device.batteryPct, device.batteryTempC, device.thermal,
+        )
+    }
+
+    override fun onDestroy() {
+        if (recorder.isRecording) recorder.stop()
+        super.onDestroy()
+    }
+
+    // endregion
 
     /** Runs the panel at its highest refresh rate: shorter scan-out, less latency. */
     private fun selectFastestDisplayMode() {
@@ -193,6 +342,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
             refreshRate = refreshRate,
             deviceName = Build.MODEL ?: "Android",
             deviceId = deviceId,
+            appVersion = appVersion,
             discovery = discovery,
             manualHost = { manualHost },
             listener = this,
@@ -216,12 +366,12 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
             when (state) {
                 StreamClient.State.STREAMING -> {
                     overlay.visibility = View.GONE
-                    hud.visibility = if (showHud) View.VISIBLE else View.GONE
+                    applyHudMode()
                 }
 
                 else -> {
                     overlay.visibility = View.VISIBLE
-                    hud.visibility = View.GONE
+                    applyHudMode()
                     statusText.text = when (state) {
                         StreamClient.State.CONNECTING -> getString(R.string.status_connecting, detail)
                         StreamClient.State.WAITING -> getString(R.string.status_waiting_stream)
@@ -232,8 +382,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
         }
     }
 
-    override fun onStats(text: String) {
-        runOnUiThread { hud.text = text }
+    override fun onSample(sample: StreamSample) {
+        runOnUiThread { showSample(sample) }
     }
 
     // endregion
@@ -242,7 +392,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
     //
     // One finger (or the stylus, or a mouse) is the mouse button. Two fingers
     // scroll or pinch to zoom, a two-finger tap is a right click and a
-    // three-finger tap toggles the stats. A finger press is held back for a
+    // three-finger tap cycles the monitor. A finger press is held back for a
     // few milliseconds so that the start of a two-finger gesture is not
     // mistaken for a click; stylus and mouse are never delayed.
 
@@ -401,8 +551,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
                     send(Protocol.ACTION_DOWN, startCx, startCy, 1f, Protocol.BUTTON_RIGHT)
                     send(Protocol.ACTION_UP, startCx, startCy, 0f, Protocol.BUTTON_RIGHT)
                 } else if (isTap && maxPointers == 3) {
-                    showHud = !showHud
-                    hud.visibility = if (showHud) View.VISIBLE else View.GONE
+                    // off -> compact line -> full monitor -> off
+                    hudMode = (hudMode + 1) % 3
+                    applyHudMode()
                 }
                 pendingDown = false
                 downSent = false
@@ -416,6 +567,10 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
 
     private companion object {
         const val PREF_HOST = "host"
+        const val HUD_OFF = 0
+        const val HUD_COMPACT = 1
+        const val HUD_FULL = 2
+        const val MAX_SHARED_CHARS = 200_000
         const val PREF_DEVICE_ID = "deviceId"
         const val ROTATION_SETTLE_MS = 350L
         /** Fraction of the screen scrolled per mouse wheel notch. */

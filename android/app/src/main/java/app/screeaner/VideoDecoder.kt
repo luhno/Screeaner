@@ -7,8 +7,6 @@ import android.os.Build
 import android.util.Log
 import android.view.Surface
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.atomic.AtomicInteger
-import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Hardware decoder rendering straight to the Surface, configured so that every
@@ -27,9 +25,45 @@ class VideoDecoder(
     private val queuedAt = ConcurrentHashMap<Long, Long>()
     private val outputThread: Thread
 
-    /** Frames rendered and total decode time since the last stats read. */
-    val renderedFrames = AtomicInteger()
-    val decodeNanos = AtomicLong()
+    /** What happened since the previous [takeStats] call. Latency is NaN until the clocks are synced. */
+    class Stats(
+        val frames: Int,
+        val decodeAvgMs: Double,
+        val decodeMaxMs: Double,
+        val latencyAvgMs: Double,
+        val latencyMaxMs: Double,
+    )
+
+    /**
+     * Mac clock minus tablet clock, in microseconds (see StreamClient's ping).
+     * With it, each frame's timestamp tells how long ago the Mac captured it.
+     */
+    @Volatile var clockOffsetMicros = Long.MIN_VALUE
+
+    private val statsLock = Any()
+    private var frames = 0
+    private var decodeNanosSum = 0L
+    private var decodeNanosMax = 0L
+    private var latencyMicrosSum = 0L
+    private var latencyMicrosMax = 0L
+    private var latencyCount = 0
+
+    fun takeStats(): Stats = synchronized(statsLock) {
+        val stats = Stats(
+            frames = frames,
+            decodeAvgMs = if (frames > 0) decodeNanosSum / frames / 1e6 else 0.0,
+            decodeMaxMs = decodeNanosMax / 1e6,
+            latencyAvgMs = if (latencyCount > 0) latencyMicrosSum / latencyCount / 1e3 else Double.NaN,
+            latencyMaxMs = if (latencyCount > 0) latencyMicrosMax / 1e3 else Double.NaN,
+        )
+        frames = 0
+        decodeNanosSum = 0
+        decodeNanosMax = 0
+        latencyMicrosSum = 0
+        latencyMicrosMax = 0
+        latencyCount = 0
+        stats
+    }
 
     init {
         val mime = mimeFor(codecName)
@@ -117,9 +151,26 @@ class VideoDecoder(
                 if (index >= 0) {
                     // render = true: display immediately, do not wait for a timestamp.
                     codec.releaseOutputBuffer(index, true)
+                    val now = System.nanoTime()
                     val start = queuedAt.remove(info.presentationTimeUs)
-                    if (start != null) decodeNanos.addAndGet(System.nanoTime() - start)
-                    renderedFrames.incrementAndGet()
+                    val offset = clockOffsetMicros
+                    synchronized(statsLock) {
+                        frames++
+                        if (start != null) {
+                            val decode = now - start
+                            decodeNanosSum += decode
+                            if (decode > decodeNanosMax) decodeNanosMax = decode
+                        }
+                        if (offset != Long.MIN_VALUE) {
+                            // Mac encode start -> handed to the display, on the Mac's clock.
+                            val latency = now / 1000 + offset - info.presentationTimeUs
+                            if (latency in 0L..2_000_000L) {
+                                latencyMicrosSum += latency
+                                if (latency > latencyMicrosMax) latencyMicrosMax = latency
+                                latencyCount++
+                            }
+                        }
+                    }
                     if (queuedAt.size > 64) queuedAt.clear()
                 }
             } catch (e: IllegalStateException) {

@@ -1,3 +1,4 @@
+import CoreMedia
 import CoreVideo
 import Foundation
 import Network
@@ -135,7 +136,12 @@ final class StreamSession {
         case .keyframeRequest:
             sendKeyframeNow()
         case .ping:
-            connection.send(.pong, payload)
+            // Echo plus our clock (the one frame timestamps use), so the tablet
+            // can line the two clocks up and measure real per-frame latency.
+            var reply = payload
+            let now = CMTimeGetSeconds(CMClockGetTime(CMClockGetHostTimeClock()))
+            reply.appendBE(UInt64(max(0, now) * 1_000_000))
+            connection.send(.pong, reply)
         case .stats:
             guard payload.count >= 16 else { return }
             lock.lock()
@@ -245,7 +251,8 @@ final class StreamSession {
 
         let config = StreamConfig(
             codec: codec.rawValue, width: width, height: height, fps: fps,
-            token: useUdp ? token : 0, udpPort: Int(Proto.port)
+            token: useUdp ? token : 0, udpPort: Int(Proto.port),
+            server: Host.current().localizedName ?? "Mac", version: Proto.appVersion
         )
         if let json = try? JSONEncoder().encode(config) {
             connection.send(.config, json)
@@ -258,7 +265,8 @@ final class StreamSession {
         }
         self.capturer = capturer
         let orientation = width >= height ? "" : " · retrato"
-        summary = "\(width)×\(height) · \(fps) Hz · \(codec == .hevc ? "HEVC" : "H.264")\(orientation)"
+        let tabletApp = hello.version.map { " · app \($0)" } ?? ""
+        summary = "\(width)×\(height) · \(fps) Hz · \(codec == .hevc ? "HEVC" : "H.264")\(orientation)\(tabletApp)"
         onStatus?("Iniciando captura…")
 
         captureQueue.async {

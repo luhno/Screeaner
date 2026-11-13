@@ -134,6 +134,7 @@ struct MenuView: View {
             Text(addresses.isEmpty ? "Sem rede" : "IP: " + addresses.joined(separator: ", "))
                 .font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
             Spacer()
+            Text("v\(Proto.appVersion)").font(.caption).foregroundStyle(.secondary)
             Button("Sair") { NSApp.terminate(nil) }
         }
     }

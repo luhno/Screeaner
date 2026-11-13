@@ -4,7 +4,16 @@
     <string name="status_searching">Procurando o Mac…</string>
     <string name="status_connecting">Conectando a %1$s…</string>
     <string name="status_waiting_stream">Conectado. Aguardando vídeo…</string>
-    <string name="help">Abra o Screeaner no Mac.\n\nUSB (menor latência): ative a Depuração USB e conecte o cabo.\nWi‑Fi: mantenha Mac e tablet na mesma rede.\n\nDois dedos: rolar · Pinça: zoom · Toque com dois dedos: clique direito\nToque com três dedos: estatísticas · Gire o tablet para usar em retrato\nTeclado e mouse ligados ao tablet controlam o Mac</string>
+    <string name="help">Abra o Screeaner no Mac.\n\nUSB (menor latência): ative a Depuração USB e conecte o cabo.\nWi‑Fi: mantenha Mac e tablet na mesma rede.\n\nDois dedos: rolar · Pinça: zoom · Toque com dois dedos: clique direito\nToque com três dedos: monitor de latência e desempenho · Gire o tablet para usar em retrato\nTeclado e mouse ligados ao tablet controlam o Mac</string>
     <string name="host_hint">IP do Mac (opcional)</string>
     <string name="connect">Conectar</string>
+    <string name="monitor_latency">LATÊNCIA</string>
+    <string name="monitor_performance">DESEMPENHO</string>
+    <string name="record_start">● Gravar sessão de teste</string>
+    <string name="record_stop">■ Parar gravação (%1$s)</string>
+    <string name="record_share">Compartilhar</string>
+    <string name="record_hint">Grava uma linha por segundo em CSV. Três dedos: alterna linha compacta, painel e oculto.</string>
+    <string name="record_saved">Salvo em %1$s</string>
+    <string name="record_failed">Não foi possível gravar a sessão</string>
+    <string name="record_none">Nenhuma sessão gravada ainda</string>
 </resources>

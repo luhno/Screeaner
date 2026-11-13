@@ -58,7 +58,7 @@ Cada push também gera o APK e o `.app` como artefatos do GitHub Actions (workfl
 | Arrastar com dois dedos | Rolagem |
 | Pinça com dois dedos | Zoom (gesto de ampliação do trackpad) |
 | Toque com dois dedos | Clique direito |
-| Toque com três dedos | Mostra/oculta o painel de latência |
+| Toque com três dedos | Alterna o monitor: linha compacta → painel completo → oculto |
 | Girar o tablet | Alterna entre paisagem e retrato (o display virtual é recriado na nova orientação) |
 
 **Teclado e mouse do tablet** — um teclado físico (USB ou Bluetooth) ligado ao tablet digita no Mac enquanto a transmissão está ativa, incluindo modificadores (a tecla Meta/Windows vira ⌘) e atalhos. Um mouse ou trackpad ligado ao tablet também controla o cursor, com botão direito e rolagem. Atalhos que o próprio Android intercepta (por exemplo Meta+Tab) não chegam ao Mac.
@@ -79,7 +79,25 @@ Cada etapa foi escolhida para não acumular fila:
 8. **Decoder low-latency** — `KEY_LOW_LATENCY`, prioridade realtime, chaves de fabricantes (Qualcomm, HiSilicon…) e renderização imediata no `SurfaceView`, sem esperar timestamp.
 9. **Painel na taxa máxima** — o tablet é colocado no maior refresh disponível para reduzir o tempo de scan-out.
 
-O painel de estatísticas (toque com três dedos) mostra cada parcela: `enc` (encode no Mac), `rede` (meia viagem do ping) e `dec` (da entrada no decoder até a tela).
+## Monitor de latência e desempenho (tablet)
+
+Um toque com três dedos alterna entre uma **linha compacta**, o **painel completo** e oculto. O painel mostra, atualizado a cada segundo e com gráfico do último minuto:
+
+- **Latência Mac→tela** — medida quadro a quadro: do instante em que o Mac começa a codificar o quadro até o tablet entregá-lo à tela, com média e pico. O tablet alinha o relógio com o do Mac pelo ping (a cada segundo), então o número tem margem de erro de até meio ping. Não inclui a captura no Mac nem o tempo de varredura do painel.
+- **Parcelas** — `encode` (no Mac), `rede` (meia viagem do ping) e `decode` (da entrada no decoder até a tela, média e pico).
+- **Desempenho** — transporte, fps, bitrate, perda de pacotes, quadros perdidos, keyframes pedidos, uso de CPU do app (% de um núcleo), memória, bateria, temperatura e estado térmico do tablet.
+
+### Sessões de teste
+
+No painel completo, **● Gravar sessão de teste** grava uma linha por segundo com todas as medidas acima. Ao parar, o arquivo ganha um resumo (latência média, p50, p95 e máxima, fps e bitrate médios, perdas, CPU média, temperatura máxima) e o cabeçalho registra as condições do teste: modelo do tablet, versões dos dois apps, resolução, codec e fps.
+
+- O CSV fica em `Android/data/app.screeaner/files/sessions/` e, no Android 10+, também em `Downloads/Screeaner/`.
+- **Compartilhar** envia a última sessão como texto por qualquer app (e-mail, Drive, mensagens).
+- A linha compacta mostra `●` enquanto a gravação está ativa; ela continua mesmo se a conexão cair e voltar.
+
+### Versão do app
+
+A versão aparece no rodapé da tela de conexão e no título do painel do tablet (`Screeaner v0.2.0 (2) · Android … · modelo`), e no rodapé do menu do Mac. Cada lado também mostra a versão do outro: o menu do Mac lista a versão do app de cada tablet, e as sessões gravadas registram a versão do Mac.
 
 ## Ajustes (menu do Mac)
 
@@ -98,13 +116,13 @@ Mudar um ajuste reinicia a transmissão automaticamente.
 
 | Tipo | Sentido | Payload |
 |---|---|---|
-| 1 `HELLO` | tablet → Mac | JSON: `width`, `height`, `densityDpi`, `refreshRate`, `codecs`, `name`, `id`, `udp` |
-| 2 `CONFIG` | Mac → tablet | JSON: `codec`, `width`, `height`, `fps`, `token`, `udpPort` |
+| 1 `HELLO` | tablet → Mac | JSON: `width`, `height`, `densityDpi`, `refreshRate`, `codecs`, `name`, `id`, `udp`, `version` |
+| 2 `CONFIG` | Mac → tablet | JSON: `codec`, `width`, `height`, `fps`, `token`, `udpPort`, `server`, `version` |
 | 3 `VIDEO` | Mac → tablet | `pts u64` · `flags u8` (1 = keyframe) · `encodeMicros u32` · access unit Annex‑B |
 | 4 `TOUCH` | tablet → Mac | `action u8` (0 down, 1 move, 2 up, 3 hover) · `x f32` · `y f32` · `pressure f32` · `button u8` |
 | 5 `SCROLL` | tablet → Mac | `dx f32` · `dy f32` · `x f32` · `y f32` |
 | 6 `KEYFRAME_REQUEST` | tablet → Mac | vazio |
-| 7 `PING` / 8 `PONG` | tablet ⇄ Mac | payload opaco, devolvido igual |
+| 7 `PING` / 8 `PONG` | tablet ⇄ Mac | payload opaco, devolvido igual; o `PONG` acrescenta `macClockMicros u64` (o mesmo relógio do `pts`) |
 | 9 `STATS` | tablet → Mac | `rttMicros u32` · `packetsExpected u32` · `packetsLost u32` · `framesLost u16` · `framesRendered u16` |
 | 10 `ZOOM` | tablet → Mac | `phase u8` (0 início, 1 mudança, 2 fim) · `delta f32` · `x f32` · `y f32` |
 | 11 `KEY` | tablet → Mac | `action u8` (0 down, 1 up) · `androidKeyCode u16` · `flags u8` (1 = repetição) |

@@ -15,10 +15,10 @@ import java.net.InetSocketAddress
 import java.net.Socket
 import java.net.SocketTimeoutException
 import java.nio.ByteBuffer
-import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
 /**
@@ -37,6 +37,7 @@ class StreamClient(
     private val refreshRate: Float,
     private val deviceName: String,
     private val deviceId: String,
+    private val appVersion: String,
     private val discovery: Discovery,
     private val manualHost: () -> String?,
     private val listener: Listener,
@@ -46,8 +47,12 @@ class StreamClient(
     /** All callbacks arrive on background threads. */
     interface Listener {
         fun onState(state: State, detail: String)
-        fun onStats(text: String)
+        fun onSample(sample: StreamSample)
     }
+
+    /** What the Mac said it is sending; null until a stream starts. */
+    @Volatile var streamInfo: StreamInfo? = null
+        private set
 
     @Volatile private var running = true
     @Volatile var isStreaming = false
@@ -61,6 +66,9 @@ class StreamClient(
     @Volatile private var lastEncodeMicros = 0
     @Volatile private var rttNanos = 0L
     @Volatile private var lastKeyframeRequest = 0L
+    @Volatile private var clockOffsetMicros = Long.MIN_VALUE
+    private var bestRttNanos = Long.MAX_VALUE // reader thread only
+    private val keyframeRequests = AtomicInteger()
     private val bytesReceived = AtomicLong()
     private val outbox = LinkedBlockingQueue<ByteArray>()
     private val badUntil = ConcurrentHashMap<Discovery.Endpoint, Long>()
@@ -186,6 +194,8 @@ class StreamClient(
         val output = socket.getOutputStream()
         overUsb = socket.inetAddress.isLoopbackAddress
         videoOverUdp = false
+        bestRttNanos = Long.MAX_VALUE
+        clockOffsetMicros = Long.MIN_VALUE
         outbox.clear()
         outbox.offer(message(Protocol.HELLO, helloJson(wantsUdp = !overUsb).toByteArray(Charsets.UTF_8)))
         val writer = Thread({ writeLoop(socket, output) }, "screeaner-writer").apply { start() }
@@ -205,13 +215,18 @@ class StreamClient(
                 when (type) {
                     Protocol.CONFIG -> if (!gotConfig) {
                         val json = JSONObject(String(buffer, 0, length, Charsets.UTF_8))
-                        decoder = VideoDecoder(
-                            json.getString("codec"),
-                            json.getInt("width"),
-                            json.getInt("height"),
-                            json.optInt("fps", 60),
-                            surface,
+                        val info = StreamInfo(
+                            codec = json.getString("codec"),
+                            width = json.getInt("width"),
+                            height = json.getInt("height"),
+                            fps = json.optInt("fps", 60),
+                            macName = json.optString("server", "Mac"),
+                            macVersion = json.optString("version", "?"),
                         )
+                        streamInfo = info
+                        decoder = VideoDecoder(info.codec, info.width, info.height, info.fps, surface).also {
+                            it.clockOffsetMicros = clockOffsetMicros
+                        }
                         gotConfig = true
                         isStreaming = true
                         val token = json.optLong("token", 0L).toInt()
@@ -238,7 +253,11 @@ class StreamClient(
                     }
 
                     Protocol.PONG -> if (length >= 8) {
-                        rttNanos = System.nanoTime() - ByteBuffer.wrap(buffer, 0, 8).long
+                        val pong = ByteBuffer.wrap(buffer, 0, length)
+                        val sentAt = pong.long
+                        val rtt = System.nanoTime() - sentAt
+                        rttNanos = rtt
+                        if (length >= 16) syncClock(sentAt, rtt, pong.long)
                     }
                 }
             }
@@ -264,10 +283,25 @@ class StreamClient(
         if (!accepted) requestKeyframe()
     }
 
+    /**
+     * The Mac stamps its clock on every pong. Assuming a symmetric path, the
+     * Mac read it half a round trip after we sent the ping; the quickest
+     * round trips give the most trustworthy offset, so those win.
+     */
+    private fun syncClock(sentAtNanos: Long, rttNanos: Long, macMicros: Long) {
+        if (bestRttNanos != Long.MAX_VALUE) bestRttNanos += bestRttNanos / 20 // let it age: clocks drift
+        if (rttNanos > bestRttNanos) return
+        bestRttNanos = rttNanos
+        val offset = macMicros - (sentAtNanos + rttNanos / 2) / 1000
+        clockOffsetMicros = offset
+        decoder?.clockOffsetMicros = offset
+    }
+
     private fun requestKeyframe() {
         val now = System.nanoTime()
         if (now - lastKeyframeRequest < 500_000_000L) return
         lastKeyframeRequest = now
+        keyframeRequests.incrementAndGet()
         outbox.offer(message(Protocol.KEYFRAME_REQUEST))
     }
 
@@ -356,11 +390,10 @@ class StreamClient(
         }
     }
 
-    /** Once per second: tells the Mac how the link is doing and refreshes the HUD. */
+    /** Once per second: tells the Mac how the link is doing and feeds the on-screen monitor. */
     private fun reportStats(output: OutputStream) {
         val current = decoder ?: return
-        val frames = current.renderedFrames.getAndSet(0)
-        val decodeNanos = current.decodeNanos.getAndSet(0)
+        val decoded = current.takeStats()
         val bytes = bytesReceived.getAndSet(0)
         val link = assembler?.takeStats() ?: intArrayOf(0, 0, 0)
         val rttMicros = (rttNanos / 1000).coerceIn(0, Int.MAX_VALUE.toLong()).toInt()
@@ -370,20 +403,25 @@ class StreamClient(
             .putInt(link[0])
             .putInt(link[1])
             .putShort(link[2].coerceAtMost(0xFFFF).toShort())
-            .putShort(frames.coerceAtMost(0xFFFF).toShort())
+            .putShort(decoded.frames.coerceAtMost(0xFFFF).toShort())
         output.write(message(Protocol.STATS, stats.array()))
 
-        val decodeMs = if (frames > 0) decodeNanos / frames / 1e6 else 0.0
-        val transport = if (overUsb) "USB" else if (videoOverUdp) "UDP+FEC" else "TCP"
-        var text = String.format(
-            Locale.US,
-            "%s · %d fps · %.1f Mbps · enc %.1f ms · rede %.1f ms · dec %.1f ms",
-            transport, frames, bytes * 8 / 1e6, lastEncodeMicros / 1000.0, rttNanos / 2e6, decodeMs,
+        listener.onSample(
+            StreamSample(
+                transport = if (overUsb) "USB" else if (videoOverUdp) "UDP+FEC" else "TCP",
+                fps = decoded.frames,
+                mbps = bytes * 8 / 1e6,
+                latencyAvgMs = decoded.latencyAvgMs,
+                latencyMaxMs = decoded.latencyMaxMs,
+                encodeMs = lastEncodeMicros / 1000.0,
+                networkMs = rttNanos / 2e6,
+                decodeAvgMs = decoded.decodeAvgMs,
+                decodeMaxMs = decoded.decodeMaxMs,
+                packetLossPct = if (link[0] > 0) link[1] * 100.0 / link[0] else 0.0,
+                framesLost = link[2],
+                keyframeRequests = keyframeRequests.getAndSet(0),
+            )
         )
-        if (link[0] > 0 && link[1] > 0) {
-            text += String.format(Locale.US, " · perda %.1f%%", link[1] * 100.0 / link[0])
-        }
-        listener.onStats(text)
     }
 
     private fun helloJson(wantsUdp: Boolean): String = JSONObject()
@@ -395,6 +433,7 @@ class StreamClient(
         .put("name", deviceName)
         .put("id", deviceId)
         .put("udp", wantsUdp)
+        .put("version", appVersion)
         .toString()
 
     private fun pause(millis: Long) {

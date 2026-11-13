@@ -17,7 +17,7 @@ object Protocol {
     const val SCROLL = 5            // tablet -> mac, [dx f32][dy f32][x f32][y f32]
     const val KEYFRAME_REQUEST = 6  // tablet -> mac
     const val PING = 7              // tablet -> mac, opaque payload
-    const val PONG = 8              // mac -> tablet, same payload echoed
+    const val PONG = 8              // mac -> tablet, same payload echoed + [macClockMicros u64]
     const val STATS = 9             // tablet -> mac, [rttMicros u32][packetsExpected u32][packetsLost u32][framesLost u16][framesRendered u16]
     const val ZOOM = 10             // tablet -> mac, [phase u8][delta f32][x f32][y f32]
     const val KEY = 11              // tablet -> mac, [action u8][androidKeyCode u16][flags u8]
