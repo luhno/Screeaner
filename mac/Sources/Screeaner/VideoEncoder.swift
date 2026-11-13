@@ -75,6 +75,12 @@ final class VideoEncoder {
         VTCompressionSessionPrepareToEncodeFrames(session)
     }
 
+    /// Changes the target bitrate on the fly (adaptive bitrate).
+    func setBitrate(_ bitrate: Int) {
+        guard let session else { return }
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_AverageBitRate, value: bitrate as CFNumber)
+    }
+
     func forceKeyframe() {
         forceKey = true
     }

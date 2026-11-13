@@ -7,10 +7,17 @@ let package = Package(
     targets: [
         // Declarations for the private CGVirtualDisplay API that lives in CoreGraphics.
         .target(name: "CVirtualDisplay", path: "Sources/CVirtualDisplay"),
+        // Pure logic (wire format, FEC, rate control) kept apart so it can be unit tested.
+        .target(name: "ScreeanerCore", path: "Sources/ScreeanerCore"),
         .executableTarget(
             name: "Screeaner",
-            dependencies: ["CVirtualDisplay"],
+            dependencies: ["CVirtualDisplay", "ScreeanerCore"],
             path: "Sources/Screeaner"
+        ),
+        .testTarget(
+            name: "ScreeanerCoreTests",
+            dependencies: ["ScreeanerCore"],
+            path: "Tests/ScreeanerCoreTests"
         ),
     ]
 )

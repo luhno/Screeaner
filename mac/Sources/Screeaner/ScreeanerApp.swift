@@ -28,6 +28,8 @@ struct MenuView: View {
     @AppStorage(SettingsKey.bitrateMbps) private var bitrate = 20
     @AppStorage(SettingsKey.codec) private var codec = Codec.h264.rawValue
     @AppStorage(SettingsKey.autoAdb) private var autoAdb = true
+    @AppStorage(SettingsKey.adaptiveBitrate) private var adaptiveBitrate = true
+    @AppStorage(SettingsKey.udpOverWifi) private var udpOverWifi = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -42,23 +44,30 @@ struct MenuView: View {
             footer
         }
         .padding(14)
-        .frame(width: 320)
+        .frame(width: 340)
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
                 Circle()
-                    .fill(model.connected ? Color.green : Color.secondary)
+                    .fill(model.tablets.isEmpty ? Color.secondary : Color.green)
                     .frame(width: 9, height: 9)
                 Text("Screeaner").font(.headline)
             }
             Text(model.status).font(.callout).fixedSize(horizontal: false, vertical: true)
-            if !model.detail.isEmpty {
-                Text(model.detail).font(.caption).foregroundStyle(.secondary)
-            }
-            if !model.statsLine.isEmpty {
-                Text(model.statsLine).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+            ForEach(model.tablets) { tablet in
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(tablet.name).font(.callout.weight(.medium))
+                    if !tablet.detail.isEmpty {
+                        Text(tablet.detail).font(.caption).foregroundStyle(.secondary)
+                    }
+                    if !tablet.stats.isEmpty {
+                        Text(tablet.stats).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .padding(.top, 2)
             }
         }
     }
@@ -72,22 +81,26 @@ struct MenuView: View {
             Picker("Taxa de quadros", selection: $fps) {
                 ForEach([30, 60, 90, 120], id: \.self) { Text("\($0) fps").tag($0) }
             }
-            Picker("Qualidade", selection: $bitrate) {
+            Picker("Qualidade máxima", selection: $bitrate) {
                 ForEach([10, 20, 40, 80], id: \.self) { Text("\($0) Mbps").tag($0) }
             }
             Picker("Codec", selection: $codec) {
                 Text("H.264 (menor latência)").tag(Codec.h264.rawValue)
                 Text("HEVC (mais nítido)").tag(Codec.hevc.rawValue)
             }
+            Toggle("Bitrate adaptativo", isOn: $adaptiveBitrate)
+            Toggle("UDP com correção de erros no Wi‑Fi", isOn: $udpOverWifi)
             Toggle("Configurar USB automaticamente (adb)", isOn: $autoAdb)
                 .disabled(!model.adbAvailable)
             Text(usbHint).font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .onChange(of: hiDPI) { _ in model.restartSession() }
-        .onChange(of: fps) { _ in model.restartSession() }
-        .onChange(of: bitrate) { _ in model.restartSession() }
-        .onChange(of: codec) { _ in model.restartSession() }
+        .onChange(of: hiDPI) { _ in model.restartSessions() }
+        .onChange(of: fps) { _ in model.restartSessions() }
+        .onChange(of: bitrate) { _ in model.restartSessions() }
+        .onChange(of: codec) { _ in model.restartSessions() }
+        .onChange(of: adaptiveBitrate) { _ in model.restartSessions() }
+        .onChange(of: udpOverWifi) { _ in model.restartSessions() }
     }
 
     private var usbHint: String {

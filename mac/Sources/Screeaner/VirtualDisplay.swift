@@ -8,8 +8,10 @@ final class VirtualDisplay {
     private let display: CGVirtualDisplay
     var displayID: CGDirectDisplayID { display.displayID }
 
-    /// Must be called on the main thread.
-    init?(name: String, pixelWidth: Int, pixelHeight: Int, hiDPI: Bool, refreshRate: Double, dpi: Int) {
+    /// Must be called on the main thread. `serial` identifies the tablet so
+    /// macOS restores where the user placed this particular display.
+    init?(name: String, serial: UInt32, pixelWidth: Int, pixelHeight: Int,
+          hiDPI: Bool, refreshRate: Double, dpi: Int) {
         let descriptor = CGVirtualDisplayDescriptor()
         descriptor.setDispatchQueue(DispatchQueue.main)
         descriptor.name = name
@@ -22,7 +24,7 @@ final class VirtualDisplay {
         )
         descriptor.vendorID = 0x5343
         descriptor.productID = 0x524E
-        descriptor.serialNum = 1
+        descriptor.serialNum = serial
 
         guard let display = CGVirtualDisplay(descriptor: descriptor) else { return nil }
 
@@ -39,5 +41,14 @@ final class VirtualDisplay {
         ]
         guard display.applySettings(settings) else { return nil }
         self.display = display
+    }
+
+    /// FNV-1a, so the same tablet always maps to the same serial number.
+    static func serial(for identifier: String) -> UInt32 {
+        var hash: UInt32 = 2_166_136_261
+        for byte in identifier.utf8 {
+            hash = (hash ^ UInt32(byte)) &* 16_777_619
+        }
+        return hash == 0 ? 1 : hash
     }
 }

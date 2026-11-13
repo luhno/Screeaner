@@ -75,6 +75,7 @@ class VideoDecoder(
      * Feeds one Annex-B access unit. Returns false if the frame had to be
      * dropped, in which case the caller should request a keyframe.
      */
+    @Synchronized
     fun feed(data: ByteArray, offset: Int, length: Int, ptsMicros: Long, isKey: Boolean): Boolean {
         if (!running) return false
         if (waitingForKeyframe && !isKey) return false
