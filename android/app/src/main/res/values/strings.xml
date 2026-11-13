@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Screeaner</string>
+    <string name="status_searching">Procurando o Mac…</string>
+    <string name="status_connecting">Conectando a %1$s…</string>
+    <string name="status_waiting_stream">Conectado. Aguardando vídeo…</string>
+    <string name="help">Abra o Screeaner no Mac.\n\nUSB (menor latência): ative a Depuração USB e conecte o cabo.\nWi‑Fi: mantenha Mac e tablet na mesma rede.\n\nDois dedos: rolar · Toque com dois dedos: clique direito · Toque com três dedos: estatísticas</string>
+    <string name="host_hint">IP do Mac (opcional)</string>
+    <string name="connect">Conectar</string>
+</resources>
