@@ -3,6 +3,7 @@ package app.screeaner
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
+import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -53,6 +54,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
     @Volatile private var manualHost: String? = null
     private var deviceId = ""
     private var streaming = false
+    private var wifiLock: WifiManager.WifiLock? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -112,6 +114,37 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
             }
         }
         surfaceView.holder.addCallback(this)
+        // Android batches input to the next vsync by default; deliver every
+        // touch, stylus, hover and mouse sample the moment it arrives instead.
+        if (Build.VERSION.SDK_INT >= 30) {
+            surfaceView.requestUnbufferedDispatch(
+                InputDevice.SOURCE_CLASS_POINTER or InputDevice.SOURCE_CLASS_POSITION,
+            )
+        }
+    }
+
+    /**
+     * Keeps the Wi-Fi radio out of power save while streaming: power save
+     * parks the radio between beacons and adds 50–100 ms spikes. Low-latency
+     * mode (Android 10+) also tells the driver to favour latency over battery.
+     */
+    private fun holdWifi(hold: Boolean) {
+        if (!hold) {
+            wifiLock?.takeIf { it.isHeld }?.release()
+            return
+        }
+        val lock = wifiLock ?: run {
+            val wifi = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager ?: return
+            @Suppress("DEPRECATION")
+            val mode = if (Build.VERSION.SDK_INT >= 29) {
+                WifiManager.WIFI_MODE_FULL_LOW_LATENCY
+            } else {
+                WifiManager.WIFI_MODE_FULL_HIGH_PERF
+            }
+            wifi.createWifiLock(mode, "screeaner:stream").apply { setReferenceCounted(false) }
+                .also { wifiLock = it }
+        }
+        if (!lock.isHeld) lock.acquire()
     }
 
     /** A keyboard attached to the tablet types on the Mac while streaming. */
@@ -257,6 +290,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
     }
 
     override fun onDestroy() {
+        holdWifi(false)
         if (recorder.isRecording) recorder.stop()
         super.onDestroy()
     }
@@ -352,6 +386,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
     override fun surfaceDestroyed(holder: SurfaceHolder) {
         handler.removeCallbacks(restartClient)
         streaming = false
+        holdWifi(false)
         client?.stop()
         client = null
     }
@@ -363,6 +398,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
     override fun onState(state: StreamClient.State, detail: String) {
         runOnUiThread {
             streaming = state == StreamClient.State.STREAMING
+            // A late callback from a client stopped in surfaceDestroyed must not re-take the lock.
+            holdWifi(streaming && client != null)
             when (state) {
                 StreamClient.State.STREAMING -> {
                     overlay.visibility = View.GONE
@@ -462,6 +499,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
                 val secondary = event.buttonState and
                     (MotionEvent.BUTTON_SECONDARY or MotionEvent.BUTTON_STYLUS_PRIMARY) != 0
                 button = if (secondary) Protocol.BUTTON_RIGHT else Protocol.BUTTON_LEFT
+                if (Build.VERSION.SDK_INT < 30) surfaceView.requestUnbufferedDispatch(event)
                 if (tool != MotionEvent.TOOL_TYPE_FINGER) {
                     pendingDown = false
                     downSent = true
@@ -469,6 +507,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
                 } else {
                     pendingDown = true
                     downSent = false
+                    // The click waits a moment in case a second finger lands,
+                    // but the cursor can jump under the finger right away.
+                    send(Protocol.ACTION_HOVER, downX, downY, 0f)
                     handler.postDelayed(flushDown, FINGER_DOWN_DELAY_MS)
                 }
             }

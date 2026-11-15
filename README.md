@@ -71,13 +71,16 @@ Cada etapa foi escolhida para não acumular fila:
 
 1. **Display virtual nativo** — a resolução é a do painel do tablet (pixel a pixel, sem reescala) e o refresh segue o do tablet (até 120 Hz).
 2. **Captura zero-copy** — o ScreenCaptureKit entrega `IOSurface` em NV12, que o VideoToolbox consome direto, e só quando a tela muda.
-3. **Encoder em modo tempo real** — rate control de baixa latência, sem B-frames, sem lookahead, um quadro entra e um sai. Keyframes só sob demanda (são os maiores picos de latência).
+3. **Encoder em modo tempo real** — rate control de baixa latência, sem B-frames, sem lookahead, um quadro entra e um sai. Keyframes só sob demanda (são os maiores picos de latência), e nenhum quadro passa de 4× o tamanho médio: quadro grande demora para atravessar o enlace (500 KB levam ~40 ms num Wi‑Fi de 100 Mbps).
 4. **Descartar antes de codificar** — se o socket está atrasado, o quadro capturado é pulado *antes* do encoder. Nunca se enfileira vídeo velho, e a cadeia de referência continua íntegra.
 5. **Transporte certo para cada enlace** — por USB, TCP com `TCP_NODELAY` (enlace sem perdas). No Wi‑Fi, o vídeo vai por **UDP com correção de erros (FEC)**: cada quadro leva pacotes de paridade e o tablet reconstrói o que se perdeu sem esperar retransmissão, que é o que causa travadas no TCP. Se o UDP estiver bloqueado, o vídeo continua por TCP automaticamente.
 6. **Bitrate adaptativo** — a cada segundo o tablet informa perda de pacotes, quadros perdidos e ping; o Mac reduz o bitrate rápido ao primeiro sinal de congestionamento e sobe devagar quando o enlace está limpo. A quantidade de paridade do FEC (10–50%) acompanha a perda medida.
 7. **Refino em tela parada** — quando a imagem para de mudar, o último quadro é recodificado duas vezes: recupera a nitidez perdida durante o movimento e, no UDP, revela ao tablet se o último quadro se perdeu.
 8. **Decoder low-latency** — `KEY_LOW_LATENCY`, prioridade realtime, chaves de fabricantes (Qualcomm, HiSilicon…) e renderização imediata no `SurfaceView`, sem esperar timestamp.
 9. **Painel na taxa máxima** — o tablet é colocado no maior refresh disponível para reduzir o tempo de scan-out.
+10. **Rádio Wi‑Fi sem economia de energia** — durante a transmissão o tablet segura um `WifiLock` em modo de baixa latência (Android 10+). Sem ele, o rádio cochila entre beacons e gera picos de 50–100 ms.
+11. **Entrada sem espera** — toque, caneta, hover e mouse são entregues no instante em que chegam (`requestUnbufferedDispatch`), sem esperar o próximo vsync. Saem marcados com DSCP EF, que o Wi‑Fi coloca na fila de voz, à frente do tráfego comum. Com um dedo, o cursor vai para baixo do dedo na hora; só o clique espera alguns milissegundos para distinguir gestos de dois dedos.
+12. **Threads de rede em prioridade de display** — leitura do vídeo, envio da entrada, decoder e UDP rodam como `URGENT_DISPLAY`, para não esperar atrás de trabalho em segundo plano.
 
 ## Monitor de latência e desempenho (tablet)
 
@@ -97,7 +100,7 @@ No painel completo, **● Gravar sessão de teste** grava uma linha por segundo 
 
 ### Versão do app
 
-A versão aparece no rodapé da tela de conexão e no título do painel do tablet (`Screeaner v0.2.0 (2) · Android … · modelo`), e no rodapé do menu do Mac. Cada lado também mostra a versão do outro: o menu do Mac lista a versão do app de cada tablet, e as sessões gravadas registram a versão do Mac.
+A versão aparece no rodapé da tela de conexão e no título do painel do tablet (`Screeaner v0.3.0 (3) · Android … · modelo`), e no rodapé do menu do Mac. Cada lado também mostra a versão do outro: o menu do Mac lista a versão do app de cada tablet, e as sessões gravadas registram a versão do Mac.
 
 ## Ajustes (menu do Mac)
 

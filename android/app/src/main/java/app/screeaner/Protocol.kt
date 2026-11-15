@@ -27,6 +27,9 @@ object Protocol {
 
     const val VIDEO_HEADER = 13
 
+    /** IP traffic class for DSCP 46 (Expedited Forwarding), which Wi-Fi maps to the voice queue. */
+    const val DSCP_EF = 0xB8
+
     const val ACTION_DOWN = 0
     const val ACTION_MOVE = 1
     const val ACTION_UP = 2

@@ -1,5 +1,6 @@
 package app.screeaner
 
+import android.os.Process
 import android.util.Log
 import android.view.Surface
 import org.json.JSONArray
@@ -142,6 +143,8 @@ class StreamClient(
     }
 
     private fun run() {
+        // This thread reads the TCP stream and feeds the decoder (all video over USB).
+        Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_DISPLAY)
         while (running) {
             listener.onState(State.SEARCHING, "")
             var connected: Socket? = null
@@ -151,6 +154,8 @@ class StreamClient(
                 val attempt = Socket()
                 try {
                     attempt.tcpNoDelay = true
+                    // DSCP EF: Wi-Fi (WMM) sends touches in the voice queue, ahead of bulk traffic.
+                    attempt.trafficClass = Protocol.DSCP_EF
                     attempt.connect(InetSocketAddress(candidate.host, candidate.port), 600)
                     connected = attempt
                     endpoint = candidate
@@ -310,6 +315,7 @@ class StreamClient(
     private fun startUdp(address: InetAddress, port: Int, token: Int): Thread? {
         val udp = try {
             DatagramSocket().apply {
+                trafficClass = Protocol.DSCP_EF
                 receiveBufferSize = 2 * 1024 * 1024
                 soTimeout = 20
             }
@@ -371,6 +377,8 @@ class StreamClient(
     // endregion
 
     private fun writeLoop(socket: Socket, output: OutputStream) {
+        // Input leaves from here: never let it wait behind background work.
+        Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_DISPLAY)
         var lastTick = 0L
         try {
             while (running && !socket.isClosed) {
