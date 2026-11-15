@@ -6,8 +6,10 @@ name: Release
 #   - Screeaner-mac.zip: the Mac app, with that APK inside.
 #
 # Repository secrets (Settings > Secrets and variables > Actions):
-#   ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD
+#   ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD
 #     required: the tablet app's signing key (see README, "Atualizações").
+#     The key alias is "screeaner" and its password is the keystore's, unless
+#     ANDROID_KEY_ALIAS / ANDROID_KEY_PASSWORD say otherwise.
 #   MAC_CERT_P12_BASE64, MAC_CERT_PASSWORD
 #     optional: a self-signed code-signing certificate, so macOS keeps the
 #     Screen Recording / Accessibility grants across updates.
@@ -50,8 +52,8 @@ jobs:
         env:
           SCREEANER_KEYSTORE: ${{ runner.temp }}/screeaner.jks
           SCREEANER_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          SCREEANER_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          SCREEANER_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          SCREEANER_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS || 'screeaner' }}
+          SCREEANER_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD || secrets.ANDROID_KEYSTORE_PASSWORD }}
         run: ./gradlew testReleaseUnitTest assembleRelease --no-daemon
       - name: Collect
         run: cp android/app/build/outputs/apk/release/app-release.apk Screeaner.apk
@@ -85,7 +87,13 @@ jobs:
           security import "$RUNNER_TEMP/cert.p12" -k "$keychain" -P "$P12_PASSWORD" -T /usr/bin/codesign
           security set-key-partition-list -S apple-tool:,apple: -s -k ci "$keychain"
           security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
-          identity="$(security find-identity -p codesigning "$keychain" | sed -n 's/.*"\(.*\)".*/\1/p' | head -1)"
+          # By hash: a self-signed certificate is not "trusted", but it signs
+          # fine, and the same certificate keeps the same code identity.
+          identity="$(security find-identity -p codesigning "$keychain" | grep -oE '[0-9A-F]{40}' | head -1)"
+          if [ -z "$identity" ]; then
+            echo "::error::No code-signing identity in MAC_CERT_P12_BASE64"
+            exit 1
+          fi
           echo "CODESIGN_IDENTITY=$identity" >> "$GITHUB_ENV"
       - name: Test
         working-directory: mac

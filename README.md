@@ -154,7 +154,7 @@ Para o Mac, baixe o `Screeaner-mac.zip` do Release e substitua o app.
    keytool -genkeypair -v -keystore screeaner.jks -alias screeaner -keyalg RSA -keysize 4096 -validity 36500
    ```
 
-   No GitHub, em *Settings › Secrets and variables › Actions*, crie `ANDROID_KEYSTORE_BASE64` (saída de `base64 -i screeaner.jks`), `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` (`screeaner`) e `ANDROID_KEY_PASSWORD`.
+   (Precisa de Java; sem ele, gere em qualquer máquina que tenha — o arquivo é o mesmo.) No GitHub, em *Settings › Secrets and variables › Actions*, crie `ANDROID_KEYSTORE_BASE64` (saída de `base64 -i screeaner.jks`) e `ANDROID_KEYSTORE_PASSWORD`. O alias padrão é `screeaner` e a senha da chave é a mesma do keystore; se forem outros, crie também `ANDROID_KEY_ALIAS` e `ANDROID_KEY_PASSWORD`.
 
 2. **Certificado do Mac (opcional, grátis)** — sem conta Apple Developer, um certificado autoassinado basta para o macOS **manter as permissões** de Gravação de Tela e Acessibilidade entre versões: *Acesso às Chaves › Assistente de Certificado › Criar um Certificado…*, nome `Screeaner`, tipo de identidade *Raiz Autoassinada*, tipo de certificado *Assinatura de Código*. Exporte como `.p12` e crie os secrets `MAC_CERT_P12_BASE64` (`base64 -i Screeaner.p12`) e `MAC_CERT_PASSWORD`. Para builds locais: `CODESIGN_IDENTITY="Screeaner" ./scripts/bundle.sh`. Sem notarização, o macOS pede *clique direito › Abrir* na primeira execução de cada versão baixada.
 
