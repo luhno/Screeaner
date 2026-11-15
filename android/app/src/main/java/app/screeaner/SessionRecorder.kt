@@ -37,6 +37,7 @@ class SessionRecorder(private val context: Context) {
     private var keyframes = 0
     private var cpuSum = 0.0
     private var maxTemp = 0.0
+    private val notes = ArrayList<String>()
 
     val isRecording: Boolean get() = writer != null
     val elapsedSeconds: Int get() = ((SystemClock.elapsedRealtime() - startedAt) / 1000).toInt()
@@ -71,6 +72,7 @@ class SessionRecorder(private val context: Context) {
             keyframes = 0
             cpuSum = 0.0
             maxTemp = 0.0
+            notes.clear()
             true
         } catch (e: Exception) {
             Log.w(TAG, "Could not start recording", e)
@@ -109,6 +111,19 @@ class SessionRecorder(private val context: Context) {
         }
     }
 
+    /** Writes [lines] (e.g. a latency test result) as comments, and repeats them in the summary. */
+    fun note(lines: List<String>) {
+        val out = writer ?: return
+        val seconds = num((SystemClock.elapsedRealtime() - startedAt) / 1000.0, 1)
+        try {
+            lines.forEach { out.write("# [$seconds s] $it\n") }
+            out.flush()
+            notes += lines
+        } catch (e: Exception) {
+            Log.w(TAG, "Recording failed", e)
+        }
+    }
+
     /** Closes the file, appends the summary and publishes a copy to Downloads when possible. */
     fun stop(): Summary? {
         val out = writer ?: return null
@@ -126,7 +141,7 @@ class SessionRecorder(private val context: Context) {
             "fps médio: ${num(fpsSum.toDouble() / n, 1)} · bitrate médio: ${num(mbpsSum / n, 1)} Mbps",
             "perda média: ${num(lossSum / n, 2)} % · quadros perdidos: $framesLost · keyframes pedidos: $keyframes",
             "CPU média do app: ${num(cpuSum / n, 0)} % de um núcleo · temp. máx. bateria: ${num(maxTemp, 1)} °C",
-        )
+        ) + notes
         try {
             out.write("# --- resumo ---\n")
             lines.forEach { out.write("# $it\n") }

@@ -21,6 +21,8 @@ object Protocol {
     const val STATS = 9             // tablet -> mac, [rttMicros u32][packetsExpected u32][packetsLost u32][framesLost u16][framesRendered u16]
     const val ZOOM = 10             // tablet -> mac, [phase u8][delta f32][x f32][y f32]
     const val KEY = 11              // tablet -> mac, [action u8][androidKeyCode u16][flags u8]
+    const val PROBE = 12            // tablet -> mac, [state u8][seq u32] (latency test square)
+    const val PROBE_ACK = 13        // mac -> tablet, [seq u32][macClockMicros u64] once the square was painted
 
     /** "SCRN": first bytes of the datagram that opens the UDP video path. */
     const val UDP_MAGIC = 0x5343524E
@@ -38,6 +40,10 @@ object Protocol {
     const val ZOOM_BEGIN = 0
     const val ZOOM_CHANGE = 1
     const val ZOOM_END = 2
+
+    const val PROBE_HIDDEN = 0
+    const val PROBE_BLACK = 1
+    const val PROBE_WHITE = 2
 
     const val BUTTON_LEFT = 0
     const val BUTTON_RIGHT = 1

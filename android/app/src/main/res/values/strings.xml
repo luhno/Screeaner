@@ -16,4 +16,13 @@
     <string name="record_saved">Salvo em %1$s</string>
     <string name="record_failed">Não foi possível gravar a sessão</string>
     <string name="record_none">Nenhuma sessão gravada ainda</string>
+    <string name="probe_start">⏱ Medir toque→tela</string>
+    <string name="probe_running">■ Medindo… %1$d/%2$d</string>
+    <string name="probe_hint">Mede a ida e volta real: o tablet pede ao Mac para piscar um quadrado no centro da tela e cronometra até ver a cor nova no vídeo.</string>
+    <string name="probe_started">Um quadrado pisca no centro da tela por alguns segundos. Não mexa no Mac enquanto mede.</string>
+    <string name="probe_last">última: %1$s ms</string>
+    <string name="probe_no_mac">O Mac não respondeu. Atualize o app do Mac para a v0.4.0 ou mais nova.</string>
+    <string name="probe_no_square">O quadrado de teste não apareceu no vídeo. Tire o cursor do centro da tela e tente de novo.</string>
+    <string name="probe_cancelled">Medição interrompida.</string>
+    <string name="probe_unavailable">Só dá para medir com a transmissão ativa.</string>
 </resources>

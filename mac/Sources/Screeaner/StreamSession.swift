@@ -48,6 +48,7 @@ final class StreamSession {
     private var display: VirtualDisplay?
     private var capturer: ScreenCapturer?
     private var injector: InputInjector?
+    private var probe: LatencyProbe?             // main queue
     private var controller: BitrateController?   // main queue
     private var adaptive = true                  // main queue
 
@@ -133,14 +134,18 @@ final class StreamSession {
                 androidKeyCode: Int(payload.readBE(UInt16.self, at: 1)),
                 isRepeat: payload[first + 3] & 1 != 0
             )
+        case .probe:
+            guard payload.count >= 5 else { return }
+            let state = LatencyProbe.State(rawValue: payload[first]) ?? .hidden
+            let seq = payload.readBE(UInt32.self, at: 1)
+            DispatchQueue.main.async { self.runProbe(state, seq: seq) }
         case .keyframeRequest:
             sendKeyframeNow()
         case .ping:
             // Echo plus our clock (the one frame timestamps use), so the tablet
             // can line the two clocks up and measure real per-frame latency.
             var reply = payload
-            let now = CMTimeGetSeconds(CMClockGetTime(CMClockGetHostTimeClock()))
-            reply.appendBE(UInt64(max(0, now) * 1_000_000))
+            reply.appendBE(Proto.hostClockMicros())
             connection.send(.pong, reply)
         case .stats:
             guard payload.count >= 16 else { return }
@@ -165,6 +170,18 @@ final class StreamSession {
                 encoder.encode(frame)
             }
         }
+    }
+
+    /// Main queue: paints the latency test square and tells the tablet when it did.
+    private func runProbe(_ state: LatencyProbe.State, seq: UInt32) {
+        guard let display, !isStopped else { return }
+        if probe == nil, state != .hidden { probe = LatencyProbe(displayID: display.displayID) }
+        let paintedAt = probe?.apply(state) ?? Proto.hostClockMicros()
+        if state == .hidden { probe = nil }
+        var reply = Data(capacity: 12)
+        reply.appendBE(seq)
+        reply.appendBE(paintedAt)
+        connection.send(.probeAck, reply)
     }
 
     // MARK: - UDP path
@@ -398,6 +415,8 @@ final class StreamSession {
                 self.encoder = nil
                 self.lastFrame = nil
             }
+            _ = self.probe?.apply(.hidden)
+            self.probe = nil
             self.injector?.releaseAll()
             self.injector = nil
             self.display = nil // unplugs the virtual monitor

@@ -48,6 +48,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
     private lateinit var fpsGraph: GraphView
     private lateinit var recordButton: Button
     private lateinit var recordInfo: TextView
+    private lateinit var probeButton: Button
+    private lateinit var probeInfo: TextView
+    private var probing = false
     private lateinit var deviceMonitor: DeviceMonitor
     private lateinit var recorder: SessionRecorder
     private var appVersion = "?"
@@ -193,12 +196,52 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
         deviceMonitor = DeviceMonitor(applicationContext)
         recorder = SessionRecorder(applicationContext)
         recordButton.setOnClickListener { toggleRecording() }
+        probeButton = findViewById(R.id.probe)
+        probeInfo = findViewById(R.id.probeInfo)
+        probeButton.setOnClickListener { toggleLatencyTest() }
         findViewById<Button>(R.id.share).setOnClickListener { shareLastSession() }
     }
 
     private fun applyHudMode() {
         hud.visibility = if (streaming && hudMode == HUD_COMPACT) View.VISIBLE else View.GONE
         monitor.visibility = if (streaming && hudMode == HUD_FULL) View.VISIBLE else View.GONE
+    }
+
+    private fun toggleLatencyTest() {
+        val current = client
+        if (probing) {
+            current?.cancelLatencyTest()
+            return
+        }
+        val started = current?.startLatencyTest(object : LatencyTest.Listener {
+            override fun onProgress(done: Int, total: Int, lastMs: Double) = runOnUiThread {
+                probeButton.text = getString(R.string.probe_running, done, total)
+                probeInfo.text = getString(R.string.probe_last, format("%.1f", lastMs))
+            }
+
+            override fun onFinished(result: LatencyTest.Result) = runOnUiThread { showLatencyResult(result) }
+        }) ?: false
+        if (started) {
+            probing = true
+            probeButton.text = getString(R.string.probe_running, 0, LatencyTest.SAMPLES)
+            probeInfo.text = getString(R.string.probe_started)
+        } else {
+            probeInfo.text = getString(R.string.probe_unavailable)
+        }
+    }
+
+    private fun showLatencyResult(result: LatencyTest.Result) {
+        probing = false
+        probeButton.text = getString(R.string.probe_start)
+        val lines = result.lines()
+        val problem = when (result.outcome) {
+            LatencyTest.Outcome.NO_MAC -> getString(R.string.probe_no_mac)
+            LatencyTest.Outcome.NO_SQUARE -> getString(R.string.probe_no_square)
+            LatencyTest.Outcome.CANCELLED -> getString(R.string.probe_cancelled)
+            LatencyTest.Outcome.DONE -> null
+        }
+        probeInfo.text = (lines + listOfNotNull(problem)).joinToString("\n")
+        if (lines.isNotEmpty()) recorder.note(lines)
     }
 
     private fun toggleRecording() {

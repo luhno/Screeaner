@@ -68,6 +68,7 @@ class StreamClient(
     @Volatile private var rttNanos = 0L
     @Volatile private var lastKeyframeRequest = 0L
     @Volatile private var clockOffsetMicros = Long.MIN_VALUE
+    @Volatile private var latencyTest: LatencyTest? = null
     private var bestRttNanos = Long.MAX_VALUE // reader thread only
     private val keyframeRequests = AtomicInteger()
     private val bytesReceived = AtomicLong()
@@ -126,6 +127,49 @@ class StreamClient(
 
     // endregion
 
+    // region Touch-to-screen latency test
+
+    /** Starts a [LatencyTest] on the running stream; false if not streaming or one is already running. */
+    fun startLatencyTest(listener: LatencyTest.Listener): Boolean {
+        val info = streamInfo ?: return false
+        val current = decoder ?: return false
+        if (!isStreaming || latencyTest != null) return false
+        val test = LatencyTest(
+            surface = surface,
+            frameWidth = info.width,
+            frameHeight = info.height,
+            send = ::sendProbe,
+            clockOffsetMicros = { clockOffsetMicros },
+            listener = object : LatencyTest.Listener {
+                override fun onProgress(done: Int, total: Int, lastMs: Double) =
+                    listener.onProgress(done, total, lastMs)
+
+                override fun onFinished(result: LatencyTest.Result) {
+                    current.onRendered = null
+                    latencyTest = null
+                    listener.onFinished(result)
+                }
+            },
+        )
+        latencyTest = test
+        current.onRendered = test::onFrameRendered
+        test.start()
+        return true
+    }
+
+    fun cancelLatencyTest() {
+        latencyTest?.cancel()
+    }
+
+    private fun sendProbe(state: Int, seq: Int) {
+        val buffer = ByteBuffer.allocate(5 + 5)
+        buffer.put(Protocol.PROBE.toByte()).putInt(5)
+        buffer.put(state.toByte()).putInt(seq)
+        outbox.offer(buffer.array())
+    }
+
+    // endregion
+
     private fun message(type: Int, payload: ByteArray = ByteArray(0)): ByteArray =
         ByteBuffer.allocate(5 + payload.size).put(type.toByte()).putInt(payload.size).put(payload).array()
 
@@ -178,6 +222,7 @@ class StreamClient(
                 if (running) Log.w(TAG, "Session ended", e)
             } finally {
                 isStreaming = false
+                latencyTest?.cancel()
                 closeQuietly(connected)
                 socket = null
                 udpSocket?.close()
@@ -255,6 +300,11 @@ class StreamClient(
                                 pts, isKey, encodeMicros, length,
                             )
                         }
+                    }
+
+                    Protocol.PROBE_ACK -> if (length >= 12) {
+                        val ack = ByteBuffer.wrap(buffer, 0, length)
+                        latencyTest?.onAck(ack.int, ack.long)
                     }
 
                     Protocol.PONG -> if (length >= 8) {

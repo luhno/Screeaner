@@ -1,3 +1,4 @@
+import CoreMedia
 import Foundation
 import ScreeanerCore
 
@@ -12,7 +13,12 @@ enum Proto {
     /// First four bytes ("SCRN") of the datagram the tablet sends to open the UDP path.
     static let udpMagic: UInt32 = 0x5343_524E
     /// Shown in the menu and sent to the tablet (which logs it in test sessions).
-    static let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.3.0"
+    static let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.4.0"
+
+    /// The host clock in microseconds: frame timestamps, pongs and probe acks all use it.
+    static func hostClockMicros() -> UInt64 {
+        UInt64(max(0, CMTimeGetSeconds(CMClockGetTime(CMClockGetHostTimeClock()))) * 1_000_000)
+    }
 }
 
 enum MsgType: UInt8 {
@@ -27,6 +33,8 @@ enum MsgType: UInt8 {
     case stats = 9            // tablet -> mac, [rttMicros u32][packetsExpected u32][packetsLost u32][framesLost u16][framesRendered u16]
     case zoom = 10            // tablet -> mac, [phase u8][delta f32][x f32][y f32]
     case key = 11             // tablet -> mac, [action u8][androidKeyCode u16][flags u8]
+    case probe = 12           // tablet -> mac, [state u8][seq u32] (latency test square)
+    case probeAck = 13        // mac -> tablet, [seq u32][macClockMicros u64] once the square was painted
 }
 
 struct Hello: Decodable {

@@ -90,6 +90,18 @@ Um toque com três dedos alterna entre uma **linha compacta**, o **painel comple
 - **Parcelas** — `encode` (no Mac), `rede` (meia viagem do ping) e `decode` (da entrada no decoder até a tela, média e pico).
 - **Desempenho** — transporte, fps, bitrate, perda de pacotes, quadros perdidos, keyframes pedidos, uso de CPU do app (% de um núcleo), memória, bateria, temperatura e estado térmico do tablet.
 
+### Teste toque→tela
+
+No painel completo, **⏱ Medir toque→tela** mede a ida e volta real, sem câmera e sem depender do relógio do Mac:
+
+1. o tablet pede ao Mac para pintar de preto ou de branco um quadrado no centro do display virtual e dispara o cronômetro;
+2. o pedido viaja como um toque; o quadrado é uma janela comum, então a mudança passa pelo caminho inteiro (WindowServer → ScreenCaptureKit → encoder → rede → decoder);
+3. o tablet copia (`PixelCopy`) o centro de cada quadro decodificado até ver a cor nova.
+
+São 30 amostras com intervalos aleatórios (para cair em todas as fases do refresh). O resultado mostra média, p50, p95, mínima e máxima, e separa **ida tablet→Mac** de **volta Mac→tela** usando o relógio sincronizado pelo ping. Com uma sessão sendo gravada, o resultado também vai para o CSV e para o resumo.
+
+O número inclui tudo entre o app do tablet e o vídeo decodificado, inclusive a composição e a captura no Mac, que o monitor quadro a quadro não vê. Não inclui o digitalizador do toque nem a varredura do painel. Antes de medir, o teste calibra quatro regiões do quadrado e ignora as que o cursor do Mac estiver cobrindo.
+
 ### Sessões de teste
 
 No painel completo, **● Gravar sessão de teste** grava uma linha por segundo com todas as medidas acima. Ao parar, o arquivo ganha um resumo (latência média, p50, p95 e máxima, fps e bitrate médios, perdas, CPU média, temperatura máxima) e o cabeçalho registra as condições do teste: modelo do tablet, versões dos dois apps, resolução, codec e fps.
@@ -100,7 +112,7 @@ No painel completo, **● Gravar sessão de teste** grava uma linha por segundo 
 
 ### Versão do app
 
-A versão aparece no rodapé da tela de conexão e no título do painel do tablet (`Screeaner v0.3.0 (3) · Android … · modelo`), e no rodapé do menu do Mac. Cada lado também mostra a versão do outro: o menu do Mac lista a versão do app de cada tablet, e as sessões gravadas registram a versão do Mac.
+A versão aparece no rodapé da tela de conexão e no título do painel do tablet (`Screeaner v0.4.0 (4) · Android … · modelo`), e no rodapé do menu do Mac. Cada lado também mostra a versão do outro: o menu do Mac lista a versão do app de cada tablet, e as sessões gravadas registram a versão do Mac.
 
 ## Ajustes (menu do Mac)
 
@@ -129,6 +141,8 @@ Mudar um ajuste reinicia a transmissão automaticamente.
 | 9 `STATS` | tablet → Mac | `rttMicros u32` · `packetsExpected u32` · `packetsLost u32` · `framesLost u16` · `framesRendered u16` |
 | 10 `ZOOM` | tablet → Mac | `phase u8` (0 início, 1 mudança, 2 fim) · `delta f32` · `x f32` · `y f32` |
 | 11 `KEY` | tablet → Mac | `action u8` (0 down, 1 up) · `androidKeyCode u16` · `flags u8` (1 = repetição) |
+| 12 `PROBE` | tablet → Mac | `state u8` (0 oculto, 1 preto, 2 branco) · `seq u32` — quadrado do teste toque→tela |
+| 13 `PROBE_ACK` | Mac → tablet | `seq u32` · `macClockMicros u64` (instante em que o quadrado foi pintado) |
 
 Coordenadas são normalizadas (0–1) em relação à tela do tablet.
 

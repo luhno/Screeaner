@@ -178,6 +178,25 @@
                 android:textAllCaps="false" />
         </LinearLayout>
 
+        <Button
+            android:id="@+id/probe"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:focusable="false"
+            android:text="@string/probe_start"
+            android:textAllCaps="false" />
+
+        <TextView
+            android:id="@+id/probeInfo"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:fontFamily="monospace"
+            android:text="@string/probe_hint"
+            android:textColor="#A9B0BD"
+            android:textSize="11sp" />
+
         <TextView
             android:id="@+id/recordInfo"
             android:layout_width="match_parent"
