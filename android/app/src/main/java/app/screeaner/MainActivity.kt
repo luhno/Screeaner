@@ -1,6 +1,7 @@
 package app.screeaner
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.Context
 import android.content.Intent
 import android.net.wifi.WifiManager
@@ -22,6 +23,8 @@ import android.view.inputmethod.InputMethodManager
 import android.widget.Button
 import android.widget.EditText
 import android.widget.TextView
+import android.widget.Toast
+import java.io.File
 import java.util.Locale
 import java.util.UUID
 import kotlin.math.abs
@@ -43,6 +46,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
     private var streamOverride: StreamOverride? = null
     @Volatile private var benchmark: Benchmark? = null
     private lateinit var benchmarkButton: Button
+    /** Update versions already offered in this run: asked once, not on every reconnect. */
+    private val updatesAsked = HashSet<Int>()
+    /** The user accepted but first had to allow installs from this app in Settings. */
+    private var updateAfterPermission = false
+    private var updateDialog: AlertDialog? = null
     private var refreshRate = 60f
     private var hudMode = HUD_OFF
     private lateinit var monitor: View
@@ -413,6 +421,10 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
 
     override fun onResume() {
         super.onResume()
+        if (updateAfterPermission && UpdateInstaller.canInstall(this)) {
+            updateAfterPermission = false
+            client?.requestUpdate()
+        }
         enterImmersive()
         discovery.start()
     }
@@ -487,6 +499,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
             manualHost = { manualHost },
             listener = this,
             override = streamOverride,
+            updateDir = File(cacheDir, "updates"),
         ).also { it.start() }
     }
 
@@ -524,6 +537,50 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
                     }
                 }
             }
+        }
+    }
+
+    override fun onUpdateOffer(offer: StreamClient.UpdateOffer) {
+        runOnUiThread {
+            // Back from allowing installs: the stream reconnected, so the offer is new; just take it.
+            if (updateAfterPermission && UpdateInstaller.canInstall(this)) {
+                updateAfterPermission = false
+                client?.requestUpdate()
+                return@runOnUiThread
+            }
+            if (!updatesAsked.add(offer.versionCode) || benchmark != null || isFinishing) return@runOnUiThread
+            updateDialog?.dismiss()
+            updateDialog = AlertDialog.Builder(this)
+                .setTitle(getString(R.string.update_title, offer.versionName))
+                .setMessage(getString(R.string.update_message, appVersion, offer.size / 1024))
+                .setPositiveButton(R.string.update_accept) { _, _ ->
+                    if (UpdateInstaller.canInstall(this)) {
+                        client?.requestUpdate()
+                    } else {
+                        updateAfterPermission = true
+                        Toast.makeText(this, R.string.update_permission, Toast.LENGTH_LONG).show()
+                        UpdateInstaller.openPermissionSettings(this)
+                    }
+                }
+                .setNegativeButton(R.string.update_later, null)
+                .show()
+        }
+    }
+
+    override fun onUpdateDownloaded(apk: File, offer: StreamClient.UpdateOffer) {
+        runOnUiThread {
+            try {
+                UpdateInstaller.install(this, apk)
+            } catch (e: Exception) {
+                Toast.makeText(this, getString(R.string.update_failed, e.message ?: "?"), Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        if (intent.action == UpdateInstaller.ACTION_RESULT) {
+            UpdateInstaller.handleResult(this, intent)?.let { Toast.makeText(this, it, Toast.LENGTH_LONG).show() }
         }
     }
 

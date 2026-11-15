@@ -30,4 +30,13 @@
     <string name="benchmark_started">Testa cada codec, taxa de quadros e o limite por quadro, com movimento padronizado e toque→tela. A tela do Mac pisca e se move durante o teste; não mexa nele.</string>
     <string name="benchmark_saved">Relatório salvo em %1$s (Compartilhar envia ele)</string>
     <string name="benchmark_busy">Aguarde o fim do benchmark.</string>
+    <string name="update_title">Atualizar o Screeaner para v%1$s?</string>
+    <string name="update_message">O app do Mac traz uma versão mais nova do app do tablet (instalada: v%1$s · %2$d KB). O Android vai pedir confirmação; o app fecha ao instalar, depois é só abrir de novo.</string>
+    <string name="update_accept">Atualizar</string>
+    <string name="update_later">Depois</string>
+    <string name="update_permission">Permita instalar apps do Screeaner e volte: a atualização continua sozinha.</string>
+    <string name="update_done">Screeaner atualizado</string>
+    <string name="update_cancelled">Atualização cancelada</string>
+    <string name="update_signature">A atualização tem outra assinatura que a versão instalada. Desinstale o Screeaner e instale o APK do Release uma vez; as próximas atualizações serão automáticas.</string>
+    <string name="update_failed">Não foi possível atualizar: %1$s</string>
 </resources>

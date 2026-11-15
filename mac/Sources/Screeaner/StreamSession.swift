@@ -40,6 +40,8 @@ final class StreamSession {
     let token = UInt32.random(in: 1...UInt32.max)
     private(set) var clientName = "Tablet"
     private(set) var deviceID: String?
+    /// The tablet app's version string, e.g. "0.5.0 (5)".
+    private(set) var clientVersion: String?
     private(set) var summary = ""
     /// Set when the session ended because of an error worth showing.
     private(set) var failure: String?
@@ -139,6 +141,8 @@ final class StreamSession {
             let state = LatencyProbe.State(rawValue: payload[first]) ?? .hidden
             let seq = payload.readBE(UInt32.self, at: 1)
             DispatchQueue.main.async { self.runProbe(state, seq: seq) }
+        case .updateRequest:
+            sendUpdate()
         case .keyframeRequest:
             sendKeyframeNow()
         case .ping:
@@ -182,6 +186,26 @@ final class StreamSession {
         reply.appendBE(seq)
         reply.appendBE(paintedAt)
         connection.send(.probeAck, reply)
+    }
+
+    // MARK: - Tablet app update
+
+    /// Tells the tablet a newer app is available; it answers with `updateRequest` if the user agrees.
+    func offerUpdate(_ apk: TabletApk) {
+        connection.queueAsync {
+            guard let loaded = apk.load(), loaded.data.count <= Proto.maxPayload else { return }
+            let offer = UpdateOffer(
+                versionName: apk.versionName, versionCode: apk.versionCode,
+                size: loaded.data.count, sha256: loaded.sha256
+            )
+            if let json = try? JSONEncoder().encode(offer) { self.connection.send(.updateOffer, json) }
+        }
+    }
+
+    /// Connection queue: the tablet accepted; send the APK in one message.
+    private func sendUpdate() {
+        guard let apk = TabletApk.bundled, let loaded = apk.load(), loaded.data.count <= Proto.maxPayload else { return }
+        connection.send(.updateApk, loaded.data)
     }
 
     // MARK: - UDP path
@@ -245,6 +269,7 @@ final class StreamSession {
         controller = BitrateController(maximum: bitrate)
         clientName = hello.name
         deviceID = hello.id
+        clientVersion = hello.version
         onHello?() // lets the app retire a stale session of the same tablet first
 
         guard let display = VirtualDisplay(

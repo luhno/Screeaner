@@ -59,6 +59,11 @@ final class ClientConnection {
         return inFlightFrames >= 3
     }
 
+    /// Runs work on the connection queue, off the main thread.
+    func queueAsync(_ work: @escaping () -> Void) {
+        queue.async(execute: work)
+    }
+
     func send(_ type: MsgType, _ payload: Data = Data()) {
         var message = Data(capacity: Proto.headerSize + payload.count)
         message.append(type.rawValue)

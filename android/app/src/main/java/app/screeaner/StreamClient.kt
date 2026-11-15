@@ -7,6 +7,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedInputStream
 import java.io.DataInputStream
+import java.io.File
 import java.io.IOException
 import java.io.OutputStream
 import java.net.DatagramPacket
@@ -16,6 +17,7 @@ import java.net.InetSocketAddress
 import java.net.Socket
 import java.net.SocketTimeoutException
 import java.nio.ByteBuffer
+import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
@@ -44,14 +46,25 @@ class StreamClient(
     private val listener: Listener,
     /** Per-stream settings asked of the Mac (the benchmark uses it); null = the Mac's menu settings. */
     private val override: StreamOverride? = null,
+    /** Where a downloaded update is stored. */
+    private val updateDir: File? = null,
 ) {
+    @Volatile private var updateOffer: UpdateOffer? = null
+
     enum class State { SEARCHING, CONNECTING, WAITING, STREAMING }
 
     /** All callbacks arrive on background threads. */
     interface Listener {
         fun onState(state: State, detail: String)
         fun onSample(sample: StreamSample)
+        /** The Mac carries a newer tablet app; call [requestUpdate] to get it. */
+        fun onUpdateOffer(offer: UpdateOffer) {}
+        /** The APK arrived and matched the offer's size and SHA-256. */
+        fun onUpdateDownloaded(apk: File, offer: UpdateOffer) {}
     }
+
+    /** What the Mac offered: its bundled tablet app. */
+    data class UpdateOffer(val versionName: String, val versionCode: Int, val size: Int, val sha256: String)
 
     /** What the Mac said it is sending; null until a stream starts. */
     @Volatile var streamInfo: StreamInfo? = null
@@ -166,6 +179,11 @@ class StreamClient(
 
     fun cancelLatencyTest() {
         latencyTest?.cancel()
+    }
+
+    /** Asks the Mac for the update it offered. */
+    fun requestUpdate() {
+        if (updateOffer != null) outbox.offer(message(Protocol.UPDATE_REQUEST))
     }
 
     /** Benchmark: covers the Mac display with a moving pattern, or removes it. */
@@ -317,6 +335,24 @@ class StreamClient(
                         }
                     }
 
+                    Protocol.UPDATE_OFFER -> {
+                        val json = JSONObject(String(buffer, 0, length, Charsets.UTF_8))
+                        val offer = UpdateOffer(
+                            versionName = json.optString("versionName", "?"),
+                            versionCode = json.optInt("versionCode", 0),
+                            size = json.optInt("size", 0),
+                            sha256 = json.optString("sha256", ""),
+                        )
+                        if (offer.versionCode > currentVersionCode() && offer.size > 0) {
+                            updateOffer = offer
+                            listener.onUpdateOffer(offer)
+                        }
+                    }
+
+                    Protocol.UPDATE_APK -> updateOffer?.let { offer ->
+                        saveUpdate(buffer, length, offer)?.let { listener.onUpdateDownloaded(it, offer) }
+                    }
+
                     Protocol.PROBE_ACK -> if (length >= 12) {
                         val ack = ByteBuffer.wrap(buffer, 0, length)
                         latencyTest?.onAck(ack.int, ack.long)
@@ -342,6 +378,29 @@ class StreamClient(
             }
         }
         return gotConfig
+    }
+
+    /** Our own version code, from "0.5.0 (5)". */
+    private fun currentVersionCode(): Int =
+        appVersion.substringAfterLast('(', "").substringBefore(')').trim().toIntOrNull() ?: 0
+
+    /** Writes the APK to [updateDir] if it matches the offer; null otherwise. */
+    private fun saveUpdate(data: ByteArray, length: Int, offer: UpdateOffer): File? {
+        val dir = updateDir ?: return null
+        if (length != offer.size) return null
+        val digest = MessageDigest.getInstance("SHA-256").digest(data.copyOf(length))
+        val hex = digest.joinToString("") { "%02x".format(it) }
+        if (!hex.equals(offer.sha256, ignoreCase = true)) {
+            Log.w(TAG, "Update rejected: checksum mismatch")
+            return null
+        }
+        return try {
+            dir.mkdirs()
+            File(dir, "screeaner-${offer.versionCode}.apk").apply { writeBytes(data.copyOf(length)) }
+        } catch (e: IOException) {
+            Log.w(TAG, "Could not save update", e)
+            null
+        }
     }
 
     private fun deliver(

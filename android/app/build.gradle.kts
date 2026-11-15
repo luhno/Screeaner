@@ -11,13 +11,30 @@ android {
         applicationId = "app.screeaner"
         minSdk = 26
         targetSdk = 35
-        versionCode = 5
-        versionName = "0.5.0"
+        versionCode = 6
+        versionName = "0.6.0"
+    }
+
+    // Updates only install over an app signed with the same key, so releases
+    // must always use the same keystore. CI passes it through these variables
+    // (see .github/workflows/release.yml); locally, export them before building.
+    val keystore = System.getenv("SCREEANER_KEYSTORE")?.let { file(it) }?.takeIf { it.exists() }
+    signingConfigs {
+        if (keystore != null) {
+            create("release") {
+                storeFile = keystore
+                storePassword = System.getenv("SCREEANER_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("SCREEANER_KEY_ALIAS")
+                keyPassword = System.getenv("SCREEANER_KEY_PASSWORD")
+            }
+        }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
+            // Without the release key, fall back to the debug key so the build still works.
+            signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
         }
     }
 

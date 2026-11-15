@@ -23,6 +23,9 @@ object Protocol {
     const val KEY = 11              // tablet -> mac, [action u8][androidKeyCode u16][flags u8]
     const val PROBE = 12            // tablet -> mac, [state u8][seq u32] (latency test square)
     const val PROBE_ACK = 13        // mac -> tablet, [seq u32][macClockMicros u64] once the square was painted
+    const val UPDATE_OFFER = 14     // mac -> tablet, JSON {versionName, versionCode, size, sha256}
+    const val UPDATE_REQUEST = 15   // tablet -> mac, empty: send the APK
+    const val UPDATE_APK = 16       // mac -> tablet, the APK bytes
 
     /** "SCRN": first bytes of the datagram that opens the UDP video path. */
     const val UDP_MAGIC = 0x5343524E

@@ -40,7 +40,7 @@ cd android
 ./gradlew installDebug       # ou abra a pasta no Android Studio
 ```
 
-Cada push também gera o APK e o `.app` como artefatos do GitHub Actions (workflow **Build**).
+Cada push também gera o APK e o `.app` como artefatos do GitHub Actions (workflow **Build**). Versões publicadas ficam em **Releases**, e depois da primeira instalação o próprio Mac mantém o tablet atualizado (veja [Atualizações](#atualizações-sem-google-play-nem-app-store)).
 
 ### 3. Conectar
 
@@ -128,7 +128,45 @@ No painel completo, **● Gravar sessão de teste** grava uma linha por segundo 
 
 ### Versão do app
 
-A versão aparece no rodapé da tela de conexão e no título do painel do tablet (`Screeaner v0.5.0 (5) · Android … · modelo`), e no rodapé do menu do Mac. Cada lado também mostra a versão do outro: o menu do Mac lista a versão do app de cada tablet, e as sessões gravadas registram a versão do Mac.
+A versão aparece no rodapé da tela de conexão e no título do painel do tablet (`Screeaner v0.6.0 (6) · Android … · modelo`), e no rodapé do menu do Mac. Cada lado também mostra a versão do outro: o menu do Mac lista a versão do app de cada tablet, e as sessões gravadas registram a versão do Mac.
+
+## Atualizações (sem Google Play nem App Store)
+
+Cada tag `vX.Y.Z` publica um **GitHub Release** (workflow **Release**) com:
+
+- `Screeaner.apk` — o app do tablet, sempre assinado com a **mesma chave**, então instala por cima da versão anterior;
+- `Screeaner-mac.zip` — o app do Mac, **com o APK do tablet dentro**.
+
+**O Mac atualiza o tablet sozinho.** Quando um tablet com versão mais velha conecta:
+
+- **por USB** (com `adb`): o Mac instala com `adb install -r` e reabre o app — nenhum toque;
+- **por Wi‑Fi** (ou se o adb falhar): o tablet pergunta *"Atualizar o Screeaner para vX?"*; um toque, o APK vem pela própria conexão (conferido por tamanho e SHA‑256) e o Android pede a confirmação de instalação. Na primeira vez, o Android pede para permitir instalações vindas do Screeaner.
+
+O Android só aceita a atualização se ela tiver a mesma assinatura do app instalado: um APK adulterado é recusado pelo próprio tablet.
+
+Para o Mac, baixe o `Screeaner-mac.zip` do Release e substitua o app.
+
+### Preparar uma vez
+
+1. **Chave do app Android** — no Mac, crie o keystore e **guarde uma cópia em lugar seguro** (sem ele não dá para publicar atualizações que instalem por cima):
+
+   ```bash
+   keytool -genkeypair -v -keystore screeaner.jks -alias screeaner -keyalg RSA -keysize 4096 -validity 36500
+   ```
+
+   No GitHub, em *Settings › Secrets and variables › Actions*, crie `ANDROID_KEYSTORE_BASE64` (saída de `base64 -i screeaner.jks`), `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` (`screeaner`) e `ANDROID_KEY_PASSWORD`.
+
+2. **Certificado do Mac (opcional, grátis)** — sem conta Apple Developer, um certificado autoassinado basta para o macOS **manter as permissões** de Gravação de Tela e Acessibilidade entre versões: *Acesso às Chaves › Assistente de Certificado › Criar um Certificado…*, nome `Screeaner`, tipo de identidade *Raiz Autoassinada*, tipo de certificado *Assinatura de Código*. Exporte como `.p12` e crie os secrets `MAC_CERT_P12_BASE64` (`base64 -i Screeaner.p12`) e `MAC_CERT_PASSWORD`. Para builds locais: `CODESIGN_IDENTITY="Screeaner" ./scripts/bundle.sh`. Sem notarização, o macOS pede *clique direito › Abrir* na primeira execução de cada versão baixada.
+
+3. **Transição** — os APKs anteriores eram assinados com chaves de debug diferentes: desinstale o Screeaner do tablet e instale o `Screeaner.apk` do primeiro Release uma vez. Daí em diante as atualizações são automáticas.
+
+### Publicar uma versão
+
+Suba `versionCode`/`versionName` em `android/app/build.gradle.kts` e `CFBundleShortVersionString`/`CFBundleVersion` em `mac/Resources/Info.plist`, e crie a tag (o workflow confere que ela bate com o `versionName`):
+
+```bash
+git tag v0.6.0 && git push origin v0.6.0
+```
 
 ## Ajustes (menu do Mac)
 
@@ -159,6 +197,9 @@ Mudar um ajuste reinicia a transmissão automaticamente.
 | 11 `KEY` | tablet → Mac | `action u8` (0 down, 1 up) · `androidKeyCode u16` · `flags u8` (1 = repetição) |
 | 12 `PROBE` | tablet → Mac | `state u8` (0 oculto, 1 preto, 2 branco, 3/4 liga/desliga o padrão de movimento do benchmark) · `seq u32` |
 | 13 `PROBE_ACK` | Mac → tablet | `seq u32` · `macClockMicros u64` (instante em que o quadrado foi pintado) |
+| 14 `UPDATE_OFFER` | Mac → tablet | JSON: `versionName`, `versionCode`, `size`, `sha256` — o Mac traz um app do tablet mais novo |
+| 15 `UPDATE_REQUEST` | tablet → Mac | vazio: o usuário aceitou |
+| 16 `UPDATE_APK` | Mac → tablet | os bytes do APK |
 
 Coordenadas são normalizadas (0–1) em relação à tela do tablet.
 

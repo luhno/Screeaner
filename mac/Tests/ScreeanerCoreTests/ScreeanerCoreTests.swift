@@ -56,4 +56,15 @@ final class BitrateControllerTests: XCTestCase {
         XCTAssertEqual(BitrateController.redundancy(forLoss: 0), 0.1)
         XCTAssertEqual(BitrateController.redundancy(forLoss: 1), 0.5)
     }
+
+    func testTabletVersionCode() {
+        XCTAssertEqual(TabletVersion.code(from: "0.5.0 (5)"), 5)
+        XCTAssertEqual(TabletVersion.code(from: "1.2.3 ( 42 )"), 42)
+        XCTAssertNil(TabletVersion.code(from: "0.5.0"))
+        XCTAssertNil(TabletVersion.code(from: nil))
+        XCTAssertTrue(TabletVersion.isOutdated(tabletVersion: "0.5.0 (5)", bundledCode: 6))
+        XCTAssertFalse(TabletVersion.isOutdated(tabletVersion: "0.6.0 (6)", bundledCode: 6))
+        // Unknown versions are left alone: they cannot install over the air anyway.
+        XCTAssertFalse(TabletVersion.isOutdated(tabletVersion: "0.1.0", bundledCode: 6))
+    }
 }

@@ -13,7 +13,7 @@ enum Proto {
     /// First four bytes ("SCRN") of the datagram the tablet sends to open the UDP path.
     static let udpMagic: UInt32 = 0x5343_524E
     /// Shown in the menu and sent to the tablet (which logs it in test sessions).
-    static let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.5.0"
+    static let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.6.0"
 
     /// The host clock in microseconds: frame timestamps, pongs and probe acks all use it.
     static func hostClockMicros() -> UInt64 {
@@ -35,6 +35,9 @@ enum MsgType: UInt8 {
     case key = 11             // tablet -> mac, [action u8][androidKeyCode u16][flags u8]
     case probe = 12           // tablet -> mac, [state u8][seq u32] (latency test square)
     case probeAck = 13        // mac -> tablet, [seq u32][macClockMicros u64] once the square was painted
+    case updateOffer = 14     // mac -> tablet, JSON UpdateOffer: a newer tablet app is available
+    case updateRequest = 15   // tablet -> mac, empty: send it
+    case updateApk = 16       // mac -> tablet, the APK bytes
 }
 
 struct Hello: Decodable {
