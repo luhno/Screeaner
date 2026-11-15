@@ -20,15 +20,20 @@ final class VideoEncoder {
     private var session: VTCompressionSession?
     private let codec: Codec
     private let fps: Int
+    private let capFrameSize: Bool
     private var forceKey = true
+    /// True when VideoToolbox accepted low-latency rate control. Without it the
+    /// encoder pipelines frames internally, which costs about one frame of latency.
+    private(set) var isLowLatency = false
     private static let startCode: [UInt8] = [0, 0, 0, 1]
 
     /// (Annex-B access unit, isKeyframe, ptsMicros, encodeMicros). Called on a VideoToolbox thread.
     var onEncoded: ((Data, Bool, UInt64, UInt32) -> Void)?
 
-    init(width: Int, height: Int, codec: Codec, fps: Int, bitrate: Int) throws {
+    init(width: Int, height: Int, codec: Codec, fps: Int, bitrate: Int, capFrameSize: Bool = true) throws {
         self.codec = codec
         self.fps = max(fps, 1)
+        self.capFrameSize = capFrameSize
         let codecType = codec == .hevc ? kCMVideoCodecType_HEVC : kCMVideoCodecType_H264
 
         let lowLatencySpec: [CFString: Any] = [
@@ -54,7 +59,10 @@ final class VideoEncoder {
                 refcon: nil,
                 compressionSessionOut: &created
             )
-            if status == noErr, created != nil { break }
+            if status == noErr, created != nil {
+                isLowLatency = spec[kVTVideoEncoderSpecification_EnableLowLatencyRateControl] != nil
+                break
+            }
         }
         guard status == noErr, let session = created else { throw EncoderError.createFailed(status) }
         self.session = session
@@ -89,6 +97,7 @@ final class VideoEncoder {
     func setBitrate(_ bitrate: Int) {
         guard let session else { return }
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_AverageBitRate, value: bitrate as CFNumber)
+        guard capFrameSize else { return }
 
         let bytesPerSecond = Double(bitrate) / 8
         let frameSeconds = 1 / Double(fps)

@@ -18,7 +18,22 @@ data class StreamInfo(
     val fps: Int,
     val macName: String,
     val macVersion: String,
-)
+    /** True when the Mac's encoder runs in low-latency rate control; null if the Mac app is too old to say. */
+    val lowLatencyEncoder: Boolean? = null,
+    /** True when each encoded frame is capped in size; null if unknown. */
+    val frameCap: Boolean? = null,
+) {
+    /** "H.264 · 60 fps · encoder baixa latência · limite por quadro" */
+    fun describe(): String {
+        val parts = mutableListOf(if (codec == "hevc") "HEVC" else "H.264", "$fps fps")
+        lowLatencyEncoder?.let { parts += if (it) "encoder baixa latência" else "encoder normal" }
+        frameCap?.let { parts += if (it) "limite por quadro" else "sem limite por quadro" }
+        return parts.joinToString(" · ")
+    }
+}
+
+/** Settings the tablet asks the Mac to use for one stream (the benchmark's configurations). */
+data class StreamOverride(val label: String, val codec: String, val fps: Int, val frameCap: Boolean)
 
 /** One second of stream measurements. Latencies are NaN while the clocks are not synced yet. */
 data class StreamSample(
@@ -31,6 +46,9 @@ data class StreamSample(
     val encodeMs: Double,
     /** Half of the ping round trip. */
     val networkMs: Double,
+    /** First byte (TCP) or datagram (UDP) of a frame -> whole frame received. */
+    val transferAvgMs: Double,
+    val transferMaxMs: Double,
     /** Frame enters the decoder -> handed to the display. */
     val decodeAvgMs: Double,
     val decodeMaxMs: Double,

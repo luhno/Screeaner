@@ -34,6 +34,7 @@ class LatencyTest(
     private val send: (state: Int, seq: Int) -> Unit,
     private val clockOffsetMicros: () -> Long,
     private val listener: Listener,
+    private val samples: Int = SAMPLES,
 ) {
     /** Both called on the test's own thread. */
     interface Listener {
@@ -247,7 +248,7 @@ class LatencyTest(
 
             var white = true
             var misses = 0
-            for (i in 1..SAMPLES) {
+            for (i in 1..samples) {
                 if (!running) {
                     outcome = Outcome.CANCELLED
                     break
@@ -287,7 +288,7 @@ class LatencyTest(
                         toScreen += down
                     }
                 }
-                listener.onProgress(i, SAMPLES, total)
+                listener.onProgress(i, samples, total)
             }
         } finally {
             send(Protocol.PROBE_HIDDEN, synchronized(lock) { ++seq })
@@ -326,14 +327,20 @@ class LatencyTest(
         private const val BRIGHT = 170
         private const val DARK = 70
 
+        /** Nearest-rank percentile (p in 0..1); NaN for an empty list. */
+        fun percentile(values: List<Double>, p: Double): Double {
+            if (values.isEmpty()) return Double.NaN
+            val sorted = values.sorted()
+            return sorted[((sorted.size - 1) * p).toInt()]
+        }
+
         /** "média · p50 · p95 · mín · máx" for a list of milliseconds. */
         fun describe(values: List<Double>): String {
             if (values.isEmpty()) return "–"
-            val sorted = values.sorted()
-            fun pct(p: Double) = sorted[((sorted.size - 1) * p).toInt()]
             return String.format(
                 Locale.US, "média %.1f ms · p50 %.1f · p95 %.1f · mín %.1f · máx %.1f",
-                values.average(), pct(0.5), pct(0.95), sorted.first(), sorted.last(),
+                values.average(), percentile(values, 0.5), percentile(values, 0.95),
+                values.minOrNull()!!, values.maxOrNull()!!,
             )
         }
     }

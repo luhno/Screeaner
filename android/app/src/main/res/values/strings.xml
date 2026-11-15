@@ -21,8 +21,13 @@
     <string name="probe_hint">Mede a ida e volta real: o tablet pede ao Mac para piscar um quadrado no centro da tela e cronometra até ver a cor nova no vídeo.</string>
     <string name="probe_started">Um quadrado pisca no centro da tela por alguns segundos. Não mexa no Mac enquanto mede.</string>
     <string name="probe_last">última: %1$s ms</string>
-    <string name="probe_no_mac">O Mac não respondeu. Atualize o app do Mac para a v0.4.0 ou mais nova.</string>
+    <string name="probe_no_mac">O Mac não respondeu. Atualize o app do Mac para a v0.4.0 ou mais nova (benchmark: v0.5.0).</string>
     <string name="probe_no_square">O quadrado de teste não apareceu no vídeo. Tire o cursor do centro da tela e tente de novo.</string>
     <string name="probe_cancelled">Medição interrompida.</string>
     <string name="probe_unavailable">Só dá para medir com a transmissão ativa.</string>
+    <string name="benchmark_start">🏁 Benchmark automático (~2 min)</string>
+    <string name="benchmark_stop">■ Parar benchmark</string>
+    <string name="benchmark_started">Testa cada codec, taxa de quadros e o limite por quadro, com movimento padronizado e toque→tela. A tela do Mac pisca e se move durante o teste; não mexa nele.</string>
+    <string name="benchmark_saved">Relatório salvo em %1$s (Compartilhar envia ele)</string>
+    <string name="benchmark_busy">Aguarde o fim do benchmark.</string>
 </resources>

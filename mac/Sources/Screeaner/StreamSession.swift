@@ -231,8 +231,12 @@ final class StreamSession {
         // Portrait tablets simply report width < height.
         let width = min(max(hello.width, 360), 4096) & ~1
         let height = min(max(hello.height, 360), 4096) & ~1
-        let fps = max(24, min(defaults.integer(forKey: SettingsKey.fps), Int(hello.refreshRate.rounded())))
-        let wantsHEVC = defaults.string(forKey: SettingsKey.codec) == Codec.hevc.rawValue
+        // The benchmark asks for specific settings for one stream; the menu keeps its own.
+        let streamOverride = hello.streamOverride
+        let requestedFps = streamOverride?.fps ?? defaults.integer(forKey: SettingsKey.fps)
+        let fps = max(24, min(requestedFps, Int(hello.refreshRate.rounded())))
+        let wantsHEVC = (streamOverride?.codec ?? defaults.string(forKey: SettingsKey.codec)) == Codec.hevc.rawValue
+        let frameCap = streamOverride?.frameCap ?? true
         let codec: Codec = (wantsHEVC && hello.codecs.contains(Codec.hevc.rawValue)) ? .hevc : .h264
         let bitrate = max(2, defaults.integer(forKey: SettingsKey.bitrateMbps)) * 1_000_000
         let useUdp = (hello.udp ?? false) && defaults.bool(forKey: SettingsKey.udpOverWifi)
@@ -256,7 +260,9 @@ final class StreamSession {
 
         let encoder: VideoEncoder
         do {
-            encoder = try VideoEncoder(width: width, height: height, codec: codec, fps: fps, bitrate: bitrate)
+            encoder = try VideoEncoder(
+                width: width, height: height, codec: codec, fps: fps, bitrate: bitrate, capFrameSize: frameCap
+            )
         } catch {
             fail(error.localizedDescription)
             return
@@ -269,7 +275,8 @@ final class StreamSession {
         let config = StreamConfig(
             codec: codec.rawValue, width: width, height: height, fps: fps,
             token: useUdp ? token : 0, udpPort: Int(Proto.port),
-            server: Host.current().localizedName ?? "Mac", version: Proto.appVersion
+            server: Host.current().localizedName ?? "Mac", version: Proto.appVersion,
+            lowLatency: encoder.isLowLatency, frameCap: frameCap
         )
         if let json = try? JSONEncoder().encode(config) {
             connection.send(.config, json)
@@ -283,7 +290,10 @@ final class StreamSession {
         self.capturer = capturer
         let orientation = width >= height ? "" : " · retrato"
         let tabletApp = hello.version.map { " · app \($0)" } ?? ""
-        summary = "\(width)×\(height) · \(fps) Hz · \(codec == .hevc ? "HEVC" : "H.264")\(orientation)\(tabletApp)"
+        let mode = encoder.isLowLatency ? "" : " · encoder normal"
+        let benchmark = streamOverride != nil ? " · benchmark" : ""
+        summary = "\(width)×\(height) · \(fps) Hz · \(codec == .hevc ? "HEVC" : "H.264")\(mode)\(orientation)"
+            + "\(tabletApp)\(benchmark)"
         onStatus?("Iniciando captura…")
 
         captureQueue.async {

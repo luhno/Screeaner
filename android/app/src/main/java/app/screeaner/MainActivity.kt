@@ -38,7 +38,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
     private lateinit var discovery: Discovery
 
     private val handler = Handler(Looper.getMainLooper())
-    private var client: StreamClient? = null
+    @Volatile private var client: StreamClient? = null
+    /** Settings the benchmark asks of the Mac for the current stream; null = the Mac's own. */
+    private var streamOverride: StreamOverride? = null
+    @Volatile private var benchmark: Benchmark? = null
+    private lateinit var benchmarkButton: Button
     private var refreshRate = 60f
     private var hudMode = HUD_OFF
     private lateinit var monitor: View
@@ -199,6 +203,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
         probeButton = findViewById(R.id.probe)
         probeInfo = findViewById(R.id.probeInfo)
         probeButton.setOnClickListener { toggleLatencyTest() }
+        benchmarkButton = findViewById(R.id.benchmark)
+        benchmarkButton.setOnClickListener { toggleBenchmark() }
         findViewById<Button>(R.id.share).setOnClickListener { shareLastSession() }
     }
 
@@ -208,6 +214,10 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
     }
 
     private fun toggleLatencyTest() {
+        if (benchmark != null) {
+            probeInfo.text = getString(R.string.benchmark_busy)
+            return
+        }
         val current = client
         if (probing) {
             current?.cancelLatencyTest()
@@ -244,6 +254,53 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
         if (lines.isNotEmpty()) recorder.note(lines)
     }
 
+    private fun toggleBenchmark() {
+        benchmark?.let {
+            it.cancel()
+            return
+        }
+        val info = client?.streamInfo
+        if (!streaming || info == null || probing) {
+            probeInfo.text = getString(R.string.probe_unavailable)
+            return
+        }
+        val configs = Benchmark.configsFor(VideoDecoder.supportedCodecs(info.width, info.height), refreshRate.roundToInt())
+        val setup = listOf(
+            "tablet: ${Build.MANUFACTURER} ${Build.MODEL} · Android ${Build.VERSION.RELEASE} · app $appVersion",
+            "mac: ${info.macName} · app ${info.macVersion}",
+            "stream: ${info.width}x${info.height} · painel ${refreshRate.roundToInt()} Hz",
+        )
+        val run = Benchmark(
+            host = object : Benchmark.Host {
+                override fun restartStream(override: StreamOverride?) = runOnUiThread {
+                    streamOverride = override
+                    startClient(force = true)
+                }
+
+                override fun currentClient(): StreamClient? = client
+            },
+            configs = configs,
+            listener = object : Benchmark.Listener {
+                override fun onStep(text: String) = runOnUiThread { probeInfo.text = text }
+                override fun onFinished(report: Benchmark.Report) = runOnUiThread { showBenchmark(report, setup) }
+            },
+        )
+        benchmark = run
+        benchmarkButton.text = getString(R.string.benchmark_stop)
+        probeInfo.text = getString(R.string.benchmark_started)
+        run.start()
+    }
+
+    private fun showBenchmark(report: Benchmark.Report, setup: List<String>) {
+        benchmark = null
+        benchmarkButton.text = getString(R.string.benchmark_start)
+        val lines = report.lines()
+        val saved = if (report.results.isNotEmpty()) recorder.saveReport(setup, report.csv(), lines) else null
+        if (recorder.isRecording) recorder.note(lines)
+        probeInfo.text = (lines + listOfNotNull(saved?.let { getString(R.string.benchmark_saved, it) }))
+            .joinToString("\n")
+    }
+
     private fun toggleRecording() {
         if (recorder.isRecording) {
             stopRecording()
@@ -253,7 +310,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
         val setup = listOf(
             "tablet: ${Build.MANUFACTURER} ${Build.MODEL} · Android ${Build.VERSION.RELEASE} · app $appVersion",
             "mac: ${info?.macName ?: "?"} · app ${info?.macVersion ?: "?"}",
-            "stream: ${info?.width}x${info?.height} · ${info?.codec} · ${info?.fps} fps · painel ${refreshRate.roundToInt()} Hz",
+            "stream: ${info?.width}x${info?.height} · ${info?.describe()} · painel ${refreshRate.roundToInt()} Hz",
         )
         if (recorder.start(setup)) {
             recordButton.text = getString(R.string.record_stop, "0:00")
@@ -303,9 +360,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
         }
 
         var compact = format(
-            "%s · %d fps · %.1f Mbps · latência %s ms (enc %.1f · rede %.1f · dec %.1f)",
+            "%s · %d fps · %.1f Mbps · latência %s ms (enc %.1f · rede %.1f · transf %.1f · dec %.1f)",
             stream.transport, stream.fps, stream.mbps, ms(stream.latencyAvgMs),
-            stream.encodeMs, stream.networkMs, stream.decodeAvgMs,
+            stream.encodeMs, stream.networkMs, stream.transferAvgMs, stream.decodeAvgMs,
         )
         if (stream.packetLossPct >= 0.1) compact += format(" · perda %.1f%%", stream.packetLossPct)
         if (recorder.isRecording) compact = "● $compact"
@@ -319,9 +376,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
         if (hudMode != HUD_FULL) return
 
         latencyText.text = format(
-            "Mac→tela  %s ms   (pico %s ms)\nencode %.1f · rede %.1f · decode %.1f (pico %.1f)",
+            "Mac→tela  %s ms   (pico %s ms)\nencode %.1f · rede %.1f · transf %.1f (pico %.1f)\n" +
+                "decode %.1f (pico %.1f)\n%s",
             ms(stream.latencyAvgMs), ms(stream.latencyMaxMs),
-            stream.encodeMs, stream.networkMs, stream.decodeAvgMs, stream.decodeMaxMs,
+            stream.encodeMs, stream.networkMs, stream.transferAvgMs, stream.transferMaxMs,
+            stream.decodeAvgMs, stream.decodeMaxMs, client?.streamInfo?.describe() ?: "",
         )
         performanceText.text = format(
             "%s · %d fps · %.1f Mbps · perda %.1f%%\nquadros perdidos %d · keyframes %d\n" +
@@ -400,14 +459,18 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
         handler.postDelayed(restartClient, if (client == null) 0L else ROTATION_SETTLE_MS)
     }
 
-    private val restartClient = Runnable {
+    private val restartClient = Runnable { startClient(force = false) }
+
+    /** (Re)connects with the surface's current size; [force] restarts even if the size did not change. */
+    private fun startClient(force: Boolean) {
         val holder = surfaceView.holder
         val frame = holder.surfaceFrame
         val width = frame.width()
         val height = frame.height()
-        if (!holder.surface.isValid || width <= 0 || height <= 0) return@Runnable
-        if (client?.hasSize(width, height) == true) return@Runnable
+        if (!holder.surface.isValid || width <= 0 || height <= 0) return
+        if (!force && client?.hasSize(width, height) == true) return
         client?.stop()
+        streaming = false
         val metrics = resources.displayMetrics
         val physicalDpi = metrics.xdpi.roundToInt()
         val dpi = if (physicalDpi in 80..800) physicalDpi else metrics.densityDpi
@@ -423,11 +486,13 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
             discovery = discovery,
             manualHost = { manualHost },
             listener = this,
+            override = streamOverride,
         ).also { it.start() }
     }
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
         handler.removeCallbacks(restartClient)
+        benchmark?.cancel()
         streaming = false
         holdWifi(false)
         client?.stop()
@@ -463,6 +528,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
     }
 
     override fun onSample(sample: StreamSample) {
+        benchmark?.onSample(sample)
         runOnUiThread { showSample(sample) }
     }
 

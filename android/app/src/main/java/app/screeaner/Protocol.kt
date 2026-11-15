@@ -44,6 +44,8 @@ object Protocol {
     const val PROBE_HIDDEN = 0
     const val PROBE_BLACK = 1
     const val PROBE_WHITE = 2
+    const val PROBE_MOTION_ON = 3   // benchmark: moving pattern over the whole display
+    const val PROBE_MOTION_OFF = 4
 
     const val BUTTON_LEFT = 0
     const val BUTTON_RIGHT = 1

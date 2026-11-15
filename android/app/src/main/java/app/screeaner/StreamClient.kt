@@ -42,6 +42,8 @@ class StreamClient(
     private val discovery: Discovery,
     private val manualHost: () -> String?,
     private val listener: Listener,
+    /** Per-stream settings asked of the Mac (the benchmark uses it); null = the Mac's menu settings. */
+    private val override: StreamOverride? = null,
 ) {
     enum class State { SEARCHING, CONNECTING, WAITING, STREAMING }
 
@@ -72,6 +74,10 @@ class StreamClient(
     private var bestRttNanos = Long.MAX_VALUE // reader thread only
     private val keyframeRequests = AtomicInteger()
     private val bytesReceived = AtomicLong()
+    private val transferLock = Any()
+    private var transferNanosSum = 0L // guarded by transferLock
+    private var transferNanosMax = 0L
+    private var transferCount = 0
     private val outbox = LinkedBlockingQueue<ByteArray>()
     private val badUntil = ConcurrentHashMap<Discovery.Endpoint, Long>()
     private val thread = Thread(::run, "screeaner-client")
@@ -130,7 +136,7 @@ class StreamClient(
     // region Touch-to-screen latency test
 
     /** Starts a [LatencyTest] on the running stream; false if not streaming or one is already running. */
-    fun startLatencyTest(listener: LatencyTest.Listener): Boolean {
+    fun startLatencyTest(listener: LatencyTest.Listener, samples: Int = LatencyTest.SAMPLES): Boolean {
         val info = streamInfo ?: return false
         val current = decoder ?: return false
         if (!isStreaming || latencyTest != null) return false
@@ -150,6 +156,7 @@ class StreamClient(
                     listener.onFinished(result)
                 }
             },
+            samples = samples,
         )
         latencyTest = test
         current.onRendered = test::onFrameRendered
@@ -159,6 +166,11 @@ class StreamClient(
 
     fun cancelLatencyTest() {
         latencyTest?.cancel()
+    }
+
+    /** Benchmark: covers the Mac display with a moving pattern, or removes it. */
+    fun setTestMotion(on: Boolean) {
+        if (isStreaming) sendProbe(if (on) Protocol.PROBE_MOTION_ON else Protocol.PROBE_MOTION_OFF, 0)
     }
 
     private fun sendProbe(state: Int, seq: Int) {
@@ -257,6 +269,7 @@ class StreamClient(
             while (running) {
                 val type = input.read()
                 if (type < 0) break
+                val firstByteNanos = System.nanoTime()
                 val length = input.readInt()
                 if (length < 0 || length > Protocol.MAX_PAYLOAD) throw IOException("Bad length $length")
                 if (length > buffer.size) buffer = ByteArray(maxOf(length, buffer.size * 2))
@@ -272,6 +285,8 @@ class StreamClient(
                             fps = json.optInt("fps", 60),
                             macName = json.optString("server", "Mac"),
                             macVersion = json.optString("version", "?"),
+                            lowLatencyEncoder = if (json.has("lowLatency")) json.getBoolean("lowLatency") else null,
+                            frameCap = if (json.has("frameCap")) json.getBoolean("frameCap") else null,
                         )
                         streamInfo = info
                         decoder = VideoDecoder(info.codec, info.width, info.height, info.fps, surface).also {
@@ -297,7 +312,7 @@ class StreamClient(
                         if (!videoOverUdp) {
                             deliver(
                                 buffer, Protocol.VIDEO_HEADER, length - Protocol.VIDEO_HEADER,
-                                pts, isKey, encodeMicros, length,
+                                pts, isKey, encodeMicros, length, System.nanoTime() - firstByteNanos,
                             )
                         }
                     }
@@ -331,9 +346,15 @@ class StreamClient(
 
     private fun deliver(
         data: ByteArray, offset: Int, length: Int, pts: Long, isKey: Boolean, encodeMicros: Int, wireBytes: Int,
+        transferNanos: Long,
     ) {
         lastEncodeMicros = encodeMicros
         bytesReceived.addAndGet(wireBytes.toLong())
+        synchronized(transferLock) {
+            transferNanosSum += transferNanos
+            if (transferNanos > transferNanosMax) transferNanosMax = transferNanos
+            transferCount++
+        }
         val accepted = decoder?.feed(data, offset, length, pts, isKey) ?: return
         if (!accepted) requestKeyframe()
     }
@@ -375,13 +396,13 @@ class StreamClient(
         }
         udpSocket = udp
         val frames = FecAssembler(object : FecAssembler.Sink {
-            override fun onFrame(blob: ByteArray, length: Int, key: Boolean) {
+            override fun onFrame(blob: ByteArray, length: Int, key: Boolean, transferNanos: Long) {
                 if (length <= UDP_BLOB_HEADER) return
                 val header = ByteBuffer.wrap(blob, 0, UDP_BLOB_HEADER)
                 val pts = header.long
                 val encodeMicros = header.int
                 videoOverUdp = true
-                deliver(blob, UDP_BLOB_HEADER, length - UDP_BLOB_HEADER, pts, key, encodeMicros, length)
+                deliver(blob, UDP_BLOB_HEADER, length - UDP_BLOB_HEADER, pts, key, encodeMicros, length, transferNanos)
             }
 
             override fun onLoss() = requestKeyframe()
@@ -455,6 +476,15 @@ class StreamClient(
         val bytes = bytesReceived.getAndSet(0)
         val link = assembler?.takeStats() ?: intArrayOf(0, 0, 0)
         val rttMicros = (rttNanos / 1000).coerceIn(0, Int.MAX_VALUE.toLong()).toInt()
+        val transferAvgMs: Double
+        val transferMaxMs: Double
+        synchronized(transferLock) {
+            transferAvgMs = if (transferCount > 0) transferNanosSum / transferCount / 1e6 else 0.0
+            transferMaxMs = transferNanosMax / 1e6
+            transferNanosSum = 0
+            transferNanosMax = 0
+            transferCount = 0
+        }
 
         val stats = ByteBuffer.allocate(16)
             .putInt(rttMicros)
@@ -473,6 +503,8 @@ class StreamClient(
                 latencyMaxMs = decoded.latencyMaxMs,
                 encodeMs = lastEncodeMicros / 1000.0,
                 networkMs = rttNanos / 2e6,
+                transferAvgMs = transferAvgMs,
+                transferMaxMs = transferMaxMs,
                 decodeAvgMs = decoded.decodeAvgMs,
                 decodeMaxMs = decoded.decodeMaxMs,
                 packetLossPct = if (link[0] > 0) link[1] * 100.0 / link[0] else 0.0,
@@ -492,6 +524,11 @@ class StreamClient(
         .put("id", deviceId)
         .put("udp", wantsUdp)
         .put("version", appVersion)
+        .apply {
+            override?.let {
+                put("streamOverride", JSONObject().put("codec", it.codec).put("fps", it.fps).put("frameCap", it.frameCap))
+            }
+        }
         .toString()
 
     private fun pause(millis: Long) {

@@ -47,10 +47,12 @@ public class FecAssemblerTest {
 
     static final class Recorder implements FecAssembler.Sink {
         final List<byte[]> frames = new ArrayList<>();
+        final List<Long> transfers = new ArrayList<>();
         int losses;
 
-        @Override public void onFrame(byte[] data, int length, boolean key) {
+        @Override public void onFrame(byte[] data, int length, boolean key, long transferNanos) {
             frames.add(Arrays.copyOf(data, length));
+            transfers.add(transferNanos);
         }
 
         @Override public void onLoss() {
@@ -86,6 +88,33 @@ public class FecAssemblerTest {
         }
         assertEquals(0, sink.losses);
         assertEquals(0, assembler.takeStats()[1]);
+    }
+
+    /** Buffers are pooled: shrinking and growing frames must never leak old bytes. */
+    @Test public void pooledBuffersStayCorrect() {
+        Recorder sink = new Recorder();
+        FecAssembler assembler = new FecAssembler(sink);
+        int id = 1;
+        for (int size : new int[] {150_000, 13, 5000, 1201, 200_000, 40, 30_000}) {
+            byte[] data = blob(size, id);
+            feed(assembler, packetize(id, data, true, 0.2), 0); // also exercise repair
+            assertArrayEquals(data, sink.frames.get(sink.frames.size() - 1));
+            id++;
+        }
+        assertEquals(7, sink.frames.size());
+        assertEquals(0, sink.losses);
+    }
+
+    @Test public void reportsTransferTime() {
+        Recorder sink = new Recorder();
+        FecAssembler assembler = new FecAssembler(sink);
+        List<byte[]> packets = packetize(1, blob(5000, 1), true, 0.2);
+        for (int i = 0; i < packets.size(); i++) {
+            assembler.onPacket(packets.get(i), packets.get(i).length, 1_000_000L + i * 250_000L);
+        }
+        assertEquals(1, sink.frames.size());
+        // Complete once the data shards are in: k = 5, so at the fifth packet.
+        assertEquals(4 * 250_000L, (long) sink.transfers.get(0));
     }
 
     @Test public void repairsBurstUpToParityCount() {

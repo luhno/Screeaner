@@ -81,13 +81,15 @@ Cada etapa foi escolhida para não acumular fila:
 10. **Rádio Wi‑Fi sem economia de energia** — durante a transmissão o tablet segura um `WifiLock` em modo de baixa latência (Android 10+). Sem ele, o rádio cochila entre beacons e gera picos de 50–100 ms.
 11. **Entrada sem espera** — toque, caneta, hover e mouse são entregues no instante em que chegam (`requestUnbufferedDispatch`), sem esperar o próximo vsync. Saem marcados com DSCP EF, que o Wi‑Fi coloca na fila de voz, à frente do tráfego comum. Com um dedo, o cursor vai para baixo do dedo na hora; só o clique espera alguns milissegundos para distinguir gestos de dois dedos.
 12. **Threads de rede em prioridade de display** — leitura do vídeo, envio da entrada, decoder e UDP rodam como `URGENT_DISPLAY`, para não esperar atrás de trabalho em segundo plano.
+13. **Sem lixo no caminho do vídeo** — o tablet reaproveita os buffers de remontagem dos quadros UDP. Alocar um por quadro gerava ~3 MB/s de lixo, e as coletas resultantes apareciam como picos de latência.
 
 ## Monitor de latência e desempenho (tablet)
 
 Um toque com três dedos alterna entre uma **linha compacta**, o **painel completo** e oculto. O painel mostra, atualizado a cada segundo e com gráfico do último minuto:
 
 - **Latência Mac→tela** — medida quadro a quadro: do instante em que o Mac começa a codificar o quadro até o tablet entregá-lo à tela, com média e pico. O tablet alinha o relógio com o do Mac pelo ping (a cada segundo), então o número tem margem de erro de até meio ping. Não inclui a captura no Mac nem o tempo de varredura do painel.
-- **Parcelas** — `encode` (no Mac), `rede` (meia viagem do ping) e `decode` (da entrada no decoder até a tela, média e pico).
+- **Parcelas** — `encode` (no Mac), `rede` (meia viagem do ping), `transf` (do primeiro byte ou datagrama do quadro até o quadro completo: o tempo de um quadro grande atravessar o enlace) e `decode` (da entrada no decoder até a tela, média e pico).
+- **Encoder** — codec, fps e se o Mac conseguiu o modo de *baixa latência* do VideoToolbox (sem ele, o encoder segura cerca de um quadro) e o limite de tamanho por quadro.
 - **Desempenho** — transporte, fps, bitrate, perda de pacotes, quadros perdidos, keyframes pedidos, uso de CPU do app (% de um núcleo), memória, bateria, temperatura e estado térmico do tablet.
 
 ### Teste toque→tela
@@ -102,6 +104,20 @@ São 30 amostras com intervalos aleatórios (para cair em todas as fases do refr
 
 O número inclui tudo entre o app do tablet e o vídeo decodificado, inclusive a composição e a captura no Mac, que o monitor quadro a quadro não vê. Não inclui o digitalizador do toque nem a varredura do painel. Antes de medir, o teste calibra quatro regiões do quadrado e ignora as que o cursor do Mac estiver cobrindo.
 
+### Benchmark automático
+
+**🏁 Benchmark automático** roda, com um toque, uma matriz de configurações e mostra qual tem a menor latência:
+
+| Configuração | Para que serve |
+|---|---|
+| HEVC 60 · com e sem limite por quadro | mede o efeito do limite de tamanho por quadro |
+| H.264 60 · com e sem limite por quadro | o mesmo, no codec que costuma ter modo de baixa latência |
+| H.264 e HEVC na taxa alta do painel (90–120 Hz) | se o atraso do encoder é de um quadro inteiro, ele cai pela metade |
+
+Cada configuração é uma transmissão nova, que o tablet pede ao Mac só para aquele teste (os ajustes do menu não mudam). Para cada uma: 3 s de aquecimento, 8 s com um **padrão de movimento fixo** cobrindo a tela do Mac (sempre o mesmo, para que rodadas sejam comparáveis) e 20 amostras do teste toque→tela com a tela parada. Leva cerca de 2 minutos; tocar de novo interrompe. No fim a transmissão normal volta sozinha.
+
+O resultado aparece no painel (uma linha por configuração, com toque p50/p95, latência em movimento e as parcelas, e a melhor configuração) e vai para `screeaner-benchmark-….csv`, ao lado das sessões e em `Downloads/Screeaner/`. **Compartilhar** envia o arquivo mais recente, inclusive o do benchmark.
+
 ### Sessões de teste
 
 No painel completo, **● Gravar sessão de teste** grava uma linha por segundo com todas as medidas acima. Ao parar, o arquivo ganha um resumo (latência média, p50, p95 e máxima, fps e bitrate médios, perdas, CPU média, temperatura máxima) e o cabeçalho registra as condições do teste: modelo do tablet, versões dos dois apps, resolução, codec e fps.
@@ -112,7 +128,7 @@ No painel completo, **● Gravar sessão de teste** grava uma linha por segundo 
 
 ### Versão do app
 
-A versão aparece no rodapé da tela de conexão e no título do painel do tablet (`Screeaner v0.4.0 (4) · Android … · modelo`), e no rodapé do menu do Mac. Cada lado também mostra a versão do outro: o menu do Mac lista a versão do app de cada tablet, e as sessões gravadas registram a versão do Mac.
+A versão aparece no rodapé da tela de conexão e no título do painel do tablet (`Screeaner v0.5.0 (5) · Android … · modelo`), e no rodapé do menu do Mac. Cada lado também mostra a versão do outro: o menu do Mac lista a versão do app de cada tablet, e as sessões gravadas registram a versão do Mac.
 
 ## Ajustes (menu do Mac)
 
@@ -131,8 +147,8 @@ Mudar um ajuste reinicia a transmissão automaticamente.
 
 | Tipo | Sentido | Payload |
 |---|---|---|
-| 1 `HELLO` | tablet → Mac | JSON: `width`, `height`, `densityDpi`, `refreshRate`, `codecs`, `name`, `id`, `udp`, `version` |
-| 2 `CONFIG` | Mac → tablet | JSON: `codec`, `width`, `height`, `fps`, `token`, `udpPort`, `server`, `version` |
+| 1 `HELLO` | tablet → Mac | JSON: `width`, `height`, `densityDpi`, `refreshRate`, `codecs`, `name`, `id`, `udp`, `version` e, opcional, `streamOverride` {`codec`, `fps`, `frameCap`} (benchmark) |
+| 2 `CONFIG` | Mac → tablet | JSON: `codec`, `width`, `height`, `fps`, `token`, `udpPort`, `server`, `version`, `lowLatency`, `frameCap` |
 | 3 `VIDEO` | Mac → tablet | `pts u64` · `flags u8` (1 = keyframe) · `encodeMicros u32` · access unit Annex‑B |
 | 4 `TOUCH` | tablet → Mac | `action u8` (0 down, 1 move, 2 up, 3 hover) · `x f32` · `y f32` · `pressure f32` · `button u8` |
 | 5 `SCROLL` | tablet → Mac | `dx f32` · `dy f32` · `x f32` · `y f32` |
@@ -141,7 +157,7 @@ Mudar um ajuste reinicia a transmissão automaticamente.
 | 9 `STATS` | tablet → Mac | `rttMicros u32` · `packetsExpected u32` · `packetsLost u32` · `framesLost u16` · `framesRendered u16` |
 | 10 `ZOOM` | tablet → Mac | `phase u8` (0 início, 1 mudança, 2 fim) · `delta f32` · `x f32` · `y f32` |
 | 11 `KEY` | tablet → Mac | `action u8` (0 down, 1 up) · `androidKeyCode u16` · `flags u8` (1 = repetição) |
-| 12 `PROBE` | tablet → Mac | `state u8` (0 oculto, 1 preto, 2 branco) · `seq u32` — quadrado do teste toque→tela |
+| 12 `PROBE` | tablet → Mac | `state u8` (0 oculto, 1 preto, 2 branco, 3/4 liga/desliga o padrão de movimento do benchmark) · `seq u32` |
 | 13 `PROBE_ACK` | Mac → tablet | `seq u32` · `macClockMicros u64` (instante em que o quadrado foi pintado) |
 
 Coordenadas são normalizadas (0–1) em relação à tela do tablet.

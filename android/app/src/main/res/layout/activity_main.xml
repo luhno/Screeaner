@@ -187,6 +187,14 @@
             android:text="@string/probe_start"
             android:textAllCaps="false" />
 
+        <Button
+            android:id="@+id/benchmark"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:focusable="false"
+            android:text="@string/benchmark_start"
+            android:textAllCaps="false" />
+
         <TextView
             android:id="@+id/probeInfo"
             android:layout_width="match_parent"
