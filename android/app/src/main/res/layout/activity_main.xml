@@ -1,231 +1,422 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Screeaner Dot: monochrome, one signal red, dots as the unit of measure. -->
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@android:color/black">
+    android:background="@color/canvas">
 
     <SurfaceView
         android:id="@+id/surface"
         android:layout_width="match_parent"
         android:layout_height="match_parent" />
 
+    <!-- 01 / Connection: shown until the stream starts. Background set in code (dot grid). -->
     <LinearLayout
         android:id="@+id/overlay"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:background="#F00E1014"
         android:clickable="true"
         android:focusable="true"
         android:focusableInTouchMode="true"
-        android:gravity="center"
         android:orientation="vertical"
-        android:padding="32dp">
-
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="@string/app_name"
-            android:textColor="#FFFFFF"
-            android:textSize="34sp"
-            android:textStyle="bold" />
-
-        <TextView
-            android:id="@+id/status"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
-            android:text="@string/status_searching"
-            android:textColor="#4F8CFF"
-            android:textSize="18sp" />
-
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="24dp"
-            android:gravity="center"
-            android:lineSpacingMultiplier="1.2"
-            android:maxWidth="560dp"
-            android:text="@string/help"
-            android:textColor="#A9B0BD"
-            android:textSize="14sp" />
+        android:paddingHorizontal="56dp"
+        android:paddingVertical="40dp">
 
         <LinearLayout
-            android:layout_width="wrap_content"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="24dp"
             android:gravity="center_vertical"
             android:orientation="horizontal">
 
-            <EditText
-                android:id="@+id/hostInput"
-                android:layout_width="240dp"
+            <TextView
+                style="@style/Text.Display"
+                android:layout_width="0dp"
                 android:layout_height="wrap_content"
-                android:hint="@string/host_hint"
-                android:imeOptions="actionDone|flagNoExtractUi"
-                android:importantForAutofill="no"
-                android:inputType="textUri"
-                android:maxLines="1"
-                android:textColor="#FFFFFF"
-                android:textColorHint="#6B7280" />
+                android:layout_weight="1"
+                android:letterSpacing="0.04"
+                android:text="SCREEANER"
+                android:textSize="22sp"
+                tools:ignore="HardcodedText" />
 
-            <Button
-                android:id="@+id/connect"
+            <TextView
+                style="@style/Text.Label"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginStart="12dp"
-                android:text="@string/connect" />
+                android:text="@string/label_connection" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical">
+
+                <TextView
+                    android:id="@+id/statusLabel"
+                    style="@style/Text.Label"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:drawableStart="@drawable/dot_signal"
+                    android:drawablePadding="10dp"
+                    android:gravity="center_vertical"
+                    android:text="@string/label_searching"
+                    android:textSize="13sp" />
+
+                <TextView
+                    android:id="@+id/status"
+                    style="@style/Text.Display"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="14dp"
+                    android:lineSpacingMultiplier="0.95"
+                    android:text="@string/status_searching"
+                    android:textSize="56sp" />
+
+                <TextView
+                    style="@style/Text.Secondary"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="14dp"
+                    android:maxWidth="520dp"
+                    android:text="@string/help"
+                    android:textSize="16sp" />
+
+                <View
+                    android:layout_width="match_parent"
+                    android:layout_height="1dp"
+                    android:layout_marginTop="24dp"
+                    android:background="@color/line" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:paddingVertical="14dp">
+
+                    <TextView
+                        style="@style/Text.Body"
+                        android:layout_width="88dp"
+                        android:layout_height="wrap_content"
+                        android:fontFamily="@font/space_grotesk_medium"
+                        android:text="@string/option_usb" />
+
+                    <TextView
+                        style="@style/Text.Secondary"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="@string/option_usb_detail"
+                        android:textSize="14sp" />
+                </LinearLayout>
+
+                <View
+                    android:layout_width="match_parent"
+                    android:layout_height="1dp"
+                    android:background="@color/line" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:paddingVertical="14dp">
+
+                    <TextView
+                        style="@style/Text.Body"
+                        android:layout_width="88dp"
+                        android:layout_height="wrap_content"
+                        android:fontFamily="@font/space_grotesk_medium"
+                        android:text="@string/option_wifi" />
+
+                    <TextView
+                        style="@style/Text.Secondary"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="@string/option_wifi_detail"
+                        android:textSize="14sp" />
+                </LinearLayout>
+
+                <View
+                    android:layout_width="match_parent"
+                    android:layout_height="1dp"
+                    android:background="@color/line" />
+
+                <TextView
+                    style="@style/Text.Label"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="24dp"
+                    android:labelFor="@id/hostInput"
+                    android:text="@string/host_hint" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <EditText
+                        android:id="@+id/hostInput"
+                        android:layout_width="0dp"
+                        android:layout_height="52dp"
+                        android:layout_weight="1"
+                        android:background="@drawable/bg_input"
+                        android:fontFamily="@font/jetbrains_mono"
+                        android:hint="192.168.0.12"
+                        android:imeOptions="actionDone|flagNoExtractUi"
+                        android:importantForAutofill="no"
+                        android:inputType="textUri"
+                        android:maxLines="1"
+                        android:paddingHorizontal="18dp"
+                        android:textColor="@color/ink"
+                        android:textColorHint="#80A6A6A2"
+                        android:textSize="16sp"
+                        tools:ignore="HardcodedText" />
+
+                    <Button
+                        android:id="@+id/connect"
+                        style="@style/Button.Primary"
+                        android:layout_width="wrap_content"
+                        android:layout_height="52dp"
+                        android:layout_marginStart="12dp"
+                        android:paddingHorizontal="28dp"
+                        android:text="@string/connect" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <app.screeaner.RadarView
+                android:id="@+id/radar"
+                android:layout_width="320dp"
+                android:layout_height="320dp"
+                android:layout_marginStart="48dp"
+                android:importantForAccessibility="no" />
         </LinearLayout>
 
         <TextView
             android:id="@+id/version"
-            android:layout_width="wrap_content"
+            style="@style/Text.Metric"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="20dp"
-            android:gravity="center"
-            android:textColor="#6B7280"
+            android:textColor="@color/ink_secondary"
             android:textSize="12sp" />
     </LinearLayout>
 
-    <!-- Full monitor: latency + performance + test-session recording -->
-    <LinearLayout
+    <!-- 02 / Monitor: latency, breakdown, last minute, device, tests. -->
+    <ScrollView
         android:id="@+id/monitor"
-        android:layout_width="340dp"
+        android:layout_width="408dp"
         android:layout_height="wrap_content"
         android:layout_gravity="top|end"
-        android:layout_margin="8dp"
-        android:background="#E60E1014"
+        android:layout_margin="16dp"
+        android:background="@drawable/bg_panel"
         android:clickable="true"
-        android:orientation="vertical"
-        android:padding="12dp"
+        android:scrollbars="none"
         android:visibility="gone">
-
-        <TextView
-            android:id="@+id/monitorTitle"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:textColor="#FFFFFF"
-            android:textSize="13sp"
-            android:textStyle="bold" />
-
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="10dp"
-            android:text="@string/monitor_latency"
-            android:textColor="#4F8CFF"
-            android:textSize="11sp"
-            android:textStyle="bold" />
-
-        <TextView
-            android:id="@+id/latencyText"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:fontFamily="monospace"
-            android:textColor="#E5E7EB"
-            android:textSize="12sp" />
-
-        <app.screeaner.GraphView
-            android:id="@+id/latencyGraph"
-            android:layout_width="match_parent"
-            android:layout_height="72dp"
-            android:layout_marginTop="4dp" />
-
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="10dp"
-            android:text="@string/monitor_performance"
-            android:textColor="#4F8CFF"
-            android:textSize="11sp"
-            android:textStyle="bold" />
-
-        <TextView
-            android:id="@+id/performanceText"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:fontFamily="monospace"
-            android:textColor="#E5E7EB"
-            android:textSize="12sp" />
-
-        <app.screeaner.GraphView
-            android:id="@+id/fpsGraph"
-            android:layout_width="match_parent"
-            android:layout_height="56dp"
-            android:layout_marginTop="4dp" />
 
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:orientation="horizontal">
+            android:orientation="vertical"
+            android:padding="24dp">
 
-            <Button
-                android:id="@+id/record"
-                android:layout_width="0dp"
+            <TextView
+                android:id="@+id/monitorTitle"
+                style="@style/Text.Label"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:focusable="false"
-                android:text="@string/record_start"
-                android:textAllCaps="false" />
+                android:maxLines="2" />
 
-            <Button
-                android:id="@+id/share"
+            <TextView
+                style="@style/Text.Label"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginStart="8dp"
-                android:focusable="false"
-                android:text="@string/record_share"
-                android:textAllCaps="false" />
+                android:layout_marginTop="20dp"
+                android:text="@string/monitor_latency" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:baselineAligned="true"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:id="@+id/latencyValue"
+                    style="@style/Text.Display"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="–"
+                    android:textSize="72sp"
+                    tools:ignore="HardcodedText" />
+
+                <TextView
+                    android:id="@+id/latencyPeak"
+                    style="@style/Text.Metric"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="10dp"
+                    android:textColor="@color/ink_secondary" />
+            </LinearLayout>
+
+            <app.screeaner.SegmentBar
+                android:id="@+id/breakdownBar"
+                android:layout_width="match_parent"
+                android:layout_height="10dp"
+                android:layout_marginTop="16dp"
+                android:importantForAccessibility="no" />
+
+            <TextView
+                android:id="@+id/latencyText"
+                style="@style/Text.Metric"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:lineSpacingMultiplier="1.3" />
+
+            <app.screeaner.GraphView
+                android:id="@+id/latencyGraph"
+                android:layout_width="match_parent"
+                android:layout_height="84dp"
+                android:layout_marginTop="16dp"
+                android:importantForAccessibility="no" />
+
+            <TextView
+                android:id="@+id/encoderText"
+                style="@style/Text.Body"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:background="@drawable/bg_alert"
+                android:drawableStart="@drawable/dot_signal"
+                android:drawablePadding="10dp"
+                android:gravity="center_vertical"
+                android:paddingHorizontal="14dp"
+                android:paddingVertical="12dp"
+                android:textSize="14sp"
+                android:visibility="gone" />
+
+            <TextView
+                style="@style/Text.Label"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="20dp"
+                android:text="@string/monitor_performance" />
+
+            <TextView
+                android:id="@+id/performanceText"
+                style="@style/Text.Metric"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:lineSpacingMultiplier="1.35" />
+
+            <app.screeaner.DotProgressView
+                android:id="@+id/testProgress"
+                android:layout_width="match_parent"
+                android:layout_height="14dp"
+                android:layout_marginTop="20dp"
+                android:importantForAccessibility="no"
+                android:visibility="gone" />
+
+            <TextView
+                android:id="@+id/probeInfo"
+                style="@style/Text.Secondary"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:fontFamily="@font/jetbrains_mono"
+                android:text="@string/probe_hint"
+                android:textSize="12sp" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:orientation="horizontal">
+
+                <Button
+                    android:id="@+id/probe"
+                    style="@style/Button.Primary"
+                    android:layout_width="0dp"
+                    android:layout_height="48dp"
+                    android:layout_weight="1"
+                    android:paddingHorizontal="12dp"
+                    android:text="@string/probe_start" />
+
+                <Button
+                    android:id="@+id/benchmark"
+                    style="@style/Button.Outline"
+                    android:layout_width="0dp"
+                    android:layout_height="48dp"
+                    android:layout_marginStart="10dp"
+                    android:layout_weight="1"
+                    android:paddingHorizontal="12dp"
+                    android:text="@string/benchmark_start" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <Button
+                    android:id="@+id/record"
+                    style="@style/Button.Outline"
+                    android:layout_width="0dp"
+                    android:layout_height="48dp"
+                    android:layout_weight="1"
+                    android:drawableStart="@drawable/dot_signal"
+                    android:drawablePadding="10dp"
+                    android:paddingHorizontal="18dp"
+                    android:text="@string/record_start" />
+
+                <ImageButton
+                    android:id="@+id/share"
+                    android:layout_width="48dp"
+                    android:layout_height="48dp"
+                    android:layout_marginStart="10dp"
+                    android:background="@drawable/bg_button_outline"
+                    android:contentDescription="@string/record_share"
+                    android:focusable="false"
+                    android:src="@drawable/ic_share" />
+            </LinearLayout>
+
+            <TextView
+                android:id="@+id/recordInfo"
+                style="@style/Text.Secondary"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:text="@string/record_hint"
+                android:textSize="12sp" />
         </LinearLayout>
+    </ScrollView>
 
-        <Button
-            android:id="@+id/probe"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
-            android:focusable="false"
-            android:text="@string/probe_start"
-            android:textAllCaps="false" />
-
-        <Button
-            android:id="@+id/benchmark"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:focusable="false"
-            android:text="@string/benchmark_start"
-            android:textAllCaps="false" />
-
-        <TextView
-            android:id="@+id/probeInfo"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
-            android:fontFamily="monospace"
-            android:text="@string/probe_hint"
-            android:textColor="#A9B0BD"
-            android:textSize="11sp" />
-
-        <TextView
-            android:id="@+id/recordInfo"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
-            android:text="@string/record_hint"
-            android:textColor="#A9B0BD"
-            android:textSize="11sp" />
-    </LinearLayout>
-
+    <!-- Compact line: transport, fps, bitrate, latency. -->
     <TextView
         android:id="@+id/hud"
+        style="@style/Text.Metric"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_gravity="top|start"
-        android:layout_margin="8dp"
-        android:background="#99000000"
-        android:fontFamily="monospace"
-        android:paddingHorizontal="8dp"
-        android:paddingVertical="4dp"
-        android:textColor="#7CFFB2"
+        android:layout_margin="12dp"
+        android:background="@drawable/bg_hud"
+        android:drawableStart="@drawable/dot_ink"
+        android:drawablePadding="10dp"
+        android:gravity="center_vertical"
+        android:paddingHorizontal="14dp"
+        android:paddingVertical="8dp"
         android:textSize="12sp"
         android:visibility="gone" />
 </FrameLayout>

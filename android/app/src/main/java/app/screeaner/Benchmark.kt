@@ -30,6 +30,8 @@ class Benchmark(
     /** Called on the benchmark thread. */
     interface Listener {
         fun onStep(text: String)
+        /** [done] of [total] steps: every configuration has [PHASES] (connect, warm up, motion, touch, done). */
+        fun onProgress(done: Int, total: Int) {}
         fun onFinished(report: Report)
     }
 
@@ -59,7 +61,8 @@ class Benchmark(
             for ((index, config) in configs.withIndex()) {
                 if (!running) break
                 val step = "${index + 1}/${configs.size} · ${config.label}"
-                results += measure(config, step) ?: break
+                results += measure(config, step, index) ?: break
+                listener.onProgress((index + 1) * PHASES, configs.size * PHASES)
             }
         } finally {
             collecting = false
@@ -70,16 +73,20 @@ class Benchmark(
     }
 
     /** Null when cancelled. */
-    private fun measure(config: StreamOverride, step: String): ConfigResult? {
+    private fun measure(config: StreamOverride, step: String, index: Int): ConfigResult? {
+        fun phase(n: Int) = listener.onProgress(index * PHASES + n, configs.size * PHASES)
+        phase(0)
         listener.onStep("$step · conectando…")
         val previous = host.currentClient()
         host.restartStream(config)
         val client = waitForStream(previous) ?: return if (running) ConfigResult.failed(config) else null
         val info = client.streamInfo ?: return ConfigResult.failed(config)
 
+        phase(1)
         listener.onStep("$step · aquecendo…")
         if (!pause(WARMUP_MS)) return null
 
+        phase(2)
         listener.onStep("$step · movimento…")
         client.setTestMotion(true)
         if (!pause(MOTION_SETTLE_MS)) return null
@@ -91,6 +98,7 @@ class Benchmark(
         val motion = synchronized(samples) { samples.toList() }
         if (!pause(STILL_SETTLE_MS)) return null
 
+        phase(3)
         listener.onStep("$step · toque→tela…")
         val done = CountDownLatch(1)
         var touch: LatencyTest.Result? = null
@@ -217,6 +225,7 @@ class Benchmark(
     }
 
     companion object {
+        const val PHASES = 5
         private const val CONNECT_TIMEOUT_MS = 20_000L
         /** Clock sync (first pongs) and the rate controller settle. */
         private const val WARMUP_MS = 3_000L

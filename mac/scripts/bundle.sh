@@ -17,6 +17,11 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/Screeaner"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 
+# Screeaner Dot fonts (OFL, see /licenses), shared with the tablet app;
+# Info.plist's ATSApplicationFontsPath makes macOS load them.
+mkdir -p "$APP/Contents/Resources/Fonts"
+cp ../android/app/src/main/res/font/*.ttf "$APP/Contents/Resources/Fonts/"
+
 APK="${SCREEANER_APK:-../android/app/build/outputs/apk/release/app-release.apk}"
 GRADLE="../android/app/build.gradle.kts"
 if [ -f "$APK" ]; then

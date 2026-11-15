@@ -36,6 +36,13 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
     private lateinit var surfaceView: SurfaceView
     private lateinit var overlay: View
     private lateinit var statusText: TextView
+    private lateinit var statusLabel: TextView
+    private lateinit var radar: RadarView
+    private lateinit var latencyValue: TextView
+    private lateinit var latencyPeak: TextView
+    private lateinit var breakdownBar: SegmentBar
+    private lateinit var encoderText: TextView
+    private lateinit var testProgress: DotProgressView
     private lateinit var hud: TextView
     private lateinit var hostInput: EditText
     private lateinit var discovery: Discovery
@@ -57,7 +64,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
     private lateinit var latencyText: TextView
     private lateinit var performanceText: TextView
     private lateinit var latencyGraph: GraphView
-    private lateinit var fpsGraph: GraphView
     private lateinit var recordButton: Button
     private lateinit var recordInfo: TextView
     private lateinit var probeButton: Button
@@ -83,6 +89,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
         surfaceView = findViewById(R.id.surface)
         overlay = findViewById(R.id.overlay)
         statusText = findViewById(R.id.status)
+        statusLabel = findViewById(R.id.statusLabel)
+        radar = findViewById(R.id.radar)
+        overlay.background = DotGridDrawable(this)
         hud = findViewById(R.id.hud)
         hostInput = findViewById(R.id.hostInput)
         discovery = Discovery(applicationContext)
@@ -188,22 +197,22 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
             "?"
         }
         val about = "Screeaner v$appVersion · Android ${Build.VERSION.RELEASE} · ${Build.MODEL}"
-        findViewById<TextView>(R.id.version).text = about
+        findViewById<TextView>(R.id.version).text = "$about   ·   ${getString(R.string.footer_gestures)}"
 
         monitor = findViewById(R.id.monitor)
         latencyText = findViewById(R.id.latencyText)
         performanceText = findViewById(R.id.performanceText)
         latencyGraph = findViewById(R.id.latencyGraph)
-        fpsGraph = findViewById(R.id.fpsGraph)
+        latencyValue = findViewById(R.id.latencyValue)
+        latencyPeak = findViewById(R.id.latencyPeak)
+        breakdownBar = findViewById(R.id.breakdownBar)
+        encoderText = findViewById(R.id.encoderText)
+        testProgress = findViewById(R.id.testProgress)
         recordButton = findViewById(R.id.record)
         recordInfo = findViewById(R.id.recordInfo)
-        findViewById<TextView>(R.id.monitorTitle).text = about
-        latencyGraph.configure(
-            "ms", 20f,
-            "total" to 0xFFFFFFFF.toInt(), "dec" to 0xFFFFB454.toInt(),
-            "rede" to 0xFF7CFFB2.toInt(), "enc" to 0xFF4F8CFF.toInt(),
-        )
-        fpsGraph.configure("fps", 30f, "fps" to 0xFF7CFFB2.toInt(), "Mbps" to 0xFF4F8CFF.toInt())
+        findViewById<TextView>(R.id.monitorTitle).text = "02 / Monitor · v$appVersion · ${Build.MODEL}"
+        // Red dots mark seconds clearly worse than a good stream (over ~2 frames at 60 Hz).
+        latencyGraph.configure("ms", 20f, alertAbove = 36f)
 
         deviceMonitor = DeviceMonitor(applicationContext)
         recorder = SessionRecorder(applicationContext)
@@ -234,6 +243,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
         val started = current?.startLatencyTest(object : LatencyTest.Listener {
             override fun onProgress(done: Int, total: Int, lastMs: Double) = runOnUiThread {
                 probeButton.text = getString(R.string.probe_running, done, total)
+                testProgress.set(1, total, done)
                 probeInfo.text = getString(R.string.probe_last, format("%.1f", lastMs))
             }
 
@@ -243,6 +253,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
             probing = true
             probeButton.text = getString(R.string.probe_running, 0, LatencyTest.SAMPLES)
             probeInfo.text = getString(R.string.probe_started)
+            testProgress.set(1, LatencyTest.SAMPLES, 0)
+            testProgress.visibility = View.VISIBLE
         } else {
             probeInfo.text = getString(R.string.probe_unavailable)
         }
@@ -251,6 +263,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
     private fun showLatencyResult(result: LatencyTest.Result) {
         probing = false
         probeButton.text = getString(R.string.probe_start)
+        testProgress.visibility = View.GONE
         val lines = result.lines()
         val problem = when (result.outcome) {
             LatencyTest.Outcome.NO_MAC -> getString(R.string.probe_no_mac)
@@ -290,18 +303,24 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
             configs = configs,
             listener = object : Benchmark.Listener {
                 override fun onStep(text: String) = runOnUiThread { probeInfo.text = text }
+                override fun onProgress(done: Int, total: Int) = runOnUiThread {
+                    testProgress.set(configs.size, Benchmark.PHASES, done)
+                }
                 override fun onFinished(report: Benchmark.Report) = runOnUiThread { showBenchmark(report, setup) }
             },
         )
         benchmark = run
         benchmarkButton.text = getString(R.string.benchmark_stop)
         probeInfo.text = getString(R.string.benchmark_started)
+        testProgress.set(configs.size, Benchmark.PHASES, 0)
+        testProgress.visibility = View.VISIBLE
         run.start()
     }
 
     private fun showBenchmark(report: Benchmark.Report, setup: List<String>) {
         benchmark = null
         benchmarkButton.text = getString(R.string.benchmark_start)
+        testProgress.visibility = View.GONE
         val lines = report.lines()
         val saved = if (report.results.isNotEmpty()) recorder.saveReport(setup, report.csv(), lines) else null
         if (recorder.isRecording) recorder.note(lines)
@@ -368,34 +387,51 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
         }
 
         var compact = format(
-            "%s · %d fps · %.1f Mbps · latência %s ms (enc %.1f · rede %.1f · transf %.1f · dec %.1f)",
+            "%s   %d fps   %.1f Mbps   %s ms",
             stream.transport, stream.fps, stream.mbps, ms(stream.latencyAvgMs),
-            stream.encodeMs, stream.networkMs, stream.transferAvgMs, stream.decodeAvgMs,
         )
-        if (stream.packetLossPct >= 0.1) compact += format(" · perda %.1f%%", stream.packetLossPct)
-        if (recorder.isRecording) compact = "● $compact"
+        if (stream.packetLossPct >= 0.1) compact += format("   perda %.1f%%", stream.packetLossPct)
         hud.text = compact
-        // Keep the history rolling even while the panel is hidden.
-        latencyGraph.push(
-            stream.latencyAvgMs.toFloat(), stream.decodeAvgMs.toFloat(),
-            stream.networkMs.toFloat(), stream.encodeMs.toFloat(),
+        // The dot turns red while a session is being recorded.
+        hud.setCompoundDrawablesRelativeWithIntrinsicBounds(
+            if (recorder.isRecording) R.drawable.dot_signal else R.drawable.dot_ink, 0, 0, 0,
         )
-        fpsGraph.push(stream.fps.toFloat(), stream.mbps.toFloat())
+        // Keep the history rolling even while the panel is hidden.
+        latencyGraph.push(stream.latencyAvgMs.toFloat())
         if (hudMode != HUD_FULL) return
 
-        latencyText.text = format(
-            "Mac→tela  %s ms   (pico %s ms)\nencode %.1f · rede %.1f · transf %.1f (pico %.1f)\n" +
-                "decode %.1f (pico %.1f)\n%s",
-            ms(stream.latencyAvgMs), ms(stream.latencyMaxMs),
-            stream.encodeMs, stream.networkMs, stream.transferAvgMs, stream.transferMaxMs,
-            stream.decodeAvgMs, stream.decodeMaxMs, client?.streamInfo?.describe() ?: "",
+        latencyValue.text = ms(stream.latencyAvgMs)
+        latencyPeak.text = format("ms · pico %s", ms(stream.latencyMaxMs))
+        breakdownBar.set(
+            floatArrayOf(
+                stream.encodeMs.toFloat(), stream.networkMs.toFloat(),
+                stream.transferAvgMs.toFloat(), stream.decodeAvgMs.toFloat(),
+            ),
+            intArrayOf(Dot.SIGNAL, Dot.ink(0.45f), Dot.ink(0.7f), Dot.INK),
         )
+        latencyText.text = format(
+            "ENC %-6.1f REDE %-5.1f TRANSF %-5.1f DEC %.1f",
+            stream.encodeMs, stream.networkMs, stream.transferAvgMs, stream.decodeAvgMs,
+        )
+        val info = client?.streamInfo
+        if (info != null && info.lowLatencyEncoder == false) {
+            encoderText.text = getString(R.string.encoder_normal, info.describe().substringBefore(" · encoder"))
+            encoderText.visibility = View.VISIBLE
+        } else {
+            encoderText.visibility = View.GONE
+        }
         performanceText.text = format(
-            "%s · %d fps · %.1f Mbps · perda %.1f%%\nquadros perdidos %d · keyframes %d\n" +
-                "CPU %.0f%% · mem %.0f MB · bat %d%% %.1f°C · térmico %s",
-            stream.transport, stream.fps, stream.mbps, stream.packetLossPct,
-            stream.framesLost, stream.keyframeRequests,
-            device.cpuPct, device.memoryMb, device.batteryPct, device.batteryTempC, device.thermal,
+            "%-9s %-9s %s\n%-9s %-9s %s\n%-9s %-9s %s",
+            "FPS", "MBPS", "PERDA",
+            stream.fps.toString(), format("%.1f", stream.mbps), format("%.2f%%", stream.packetLossPct),
+            "CPU", "MEM", "BATERIA",
+        ) + "\n" + format(
+            "%-9s %-9s %s",
+            format("%.0f%%", device.cpuPct), format("%.0f MB", device.memoryMb),
+            format("%d%% %.1f°", device.batteryPct, device.batteryTempC),
+        ) + "\n" + format(
+            "%s · %s · quadros perdidos %d · keyframes %d",
+            stream.transport, info?.describe() ?: "", stream.framesLost, stream.keyframeRequests,
         )
     }
 
@@ -531,10 +567,16 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
                     overlay.visibility = View.VISIBLE
                     applyHudMode()
                     statusText.text = when (state) {
-                        StreamClient.State.CONNECTING -> getString(R.string.status_connecting, detail)
+                        StreamClient.State.CONNECTING -> getString(R.string.status_connecting)
                         StreamClient.State.WAITING -> getString(R.string.status_waiting_stream)
                         else -> getString(R.string.status_searching)
                     }
+                    statusLabel.text = when (state) {
+                        StreamClient.State.CONNECTING -> getString(R.string.label_connecting, detail)
+                        StreamClient.State.WAITING -> getString(R.string.label_waiting)
+                        else -> getString(R.string.label_searching)
+                    }
+                    radar.searching = state == StreamClient.State.SEARCHING
                 }
             }
         }

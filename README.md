@@ -209,6 +209,18 @@ Coordenadas são normalizadas (0–1) em relação à tela do tablet.
 
 O quadro (`pts u64` · `encodeMicros u32` · Annex‑B) é dividido em `k` shards iguais de até 1200 bytes, mais `m` shards de paridade; a paridade `j` é o XOR dos shards de dados `i` com `i % m == j`. Isso recupera uma perda por grupo, ou seja, qualquer rajada de até `m` pacotes seguidos. Um quadro irrecuperável faz o tablet pedir um keyframe.
 
+## Visual (Screeaner Dot)
+
+Os dois apps seguem a mesma linguagem: **tinta clara sobre preto**, um único **vermelho de sinal** (`#E8352B`) só para o que está ao vivo, gravando ou errado, e **pontos como unidade de medida** (progresso em pontos, gráfico de latência em pontos, radar de busca). Rótulos numerados (`01 / CONEXÃO`) e linhas de 1 px no lugar de caixas e gradientes.
+
+| Papel | Fonte |
+|---|---|
+| Números grandes e marca | Doto (matriz de pontos) |
+| Interface | Space Grotesk |
+| Rótulos e métricas | JetBrains Mono |
+
+As fontes vão embutidas nos apps (tablet: `res/font`; Mac: `Contents/Resources/Fonts`), sob a SIL Open Font License — textos em `licenses/`.
+
 ## Estrutura
 
 ```

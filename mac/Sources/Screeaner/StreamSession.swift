@@ -40,6 +40,8 @@ final class StreamSession {
     let token = UInt32.random(in: 1...UInt32.max)
     private(set) var clientName = "Tablet"
     private(set) var deviceID: String?
+    /// Whether VideoToolbox accepted low-latency rate control; nil before the stream starts.
+    private(set) var lowLatencyEncoder: Bool?
     /// The tablet app's version string, e.g. "0.5.0 (5)".
     private(set) var clientVersion: String?
     private(set) var summary = ""
@@ -295,6 +297,7 @@ final class StreamSession {
         encoder.onEncoded = { [weak self] data, isKey, pts, encodeMicros in
             self?.transmit(data, isKey: isKey, ptsMicros: pts, encodeMicros: encodeMicros)
         }
+        lowLatencyEncoder = encoder.isLowLatency
         injector = InputInjector(displayID: display.displayID)
 
         let config = StreamConfig(
@@ -315,9 +318,8 @@ final class StreamSession {
         self.capturer = capturer
         let orientation = width >= height ? "" : " · retrato"
         let tabletApp = hello.version.map { " · app \($0)" } ?? ""
-        let mode = encoder.isLowLatency ? "" : " · encoder normal"
         let benchmark = streamOverride != nil ? " · benchmark" : ""
-        summary = "\(width)×\(height) · \(fps) Hz · \(codec == .hevc ? "HEVC" : "H.264")\(mode)\(orientation)"
+        summary = "\(width)×\(height) · \(fps) Hz · \(codec == .hevc ? "HEVC" : "H.264")\(orientation)"
             + "\(tabletApp)\(benchmark)"
         onStatus?("Iniciando captura…")
 

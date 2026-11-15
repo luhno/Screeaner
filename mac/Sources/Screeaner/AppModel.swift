@@ -9,6 +9,8 @@ struct TabletRow: Identifiable {
     var name: String
     var detail: String
     var stats: String
+    /// The encoder fell back to normal rate control (about one frame more latency).
+    var encoderNormal = false
 }
 
 /// App-wide state. Everything here runs on the main queue.
@@ -124,7 +126,8 @@ final class AppModel: ObservableObject {
             let id = ObjectIdentifier(session)
             return TabletRow(
                 id: id, name: session.clientName, detail: session.summary,
-                stats: stats[id] ?? previous[id] ?? ""
+                stats: stats[id] ?? previous[id] ?? "",
+                encoderNormal: session.lowLatencyEncoder == false
             )
         }
         if !sessions.isEmpty, sessions.allSatisfy({ $0.failure == nil }) {

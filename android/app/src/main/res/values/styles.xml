@@ -1,8 +1,75 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <style name="AppTheme" parent="android:Theme.Material.NoActionBar">
-        <item name="android:windowBackground">@android:color/black</item>
+        <item name="android:windowBackground">@color/canvas</item>
         <item name="android:windowFullscreen">true</item>
-        <item name="android:colorAccent">#4F8CFF</item>
+        <item name="android:colorAccent">@color/ink</item>
+        <item name="android:textColorPrimary">@color/ink</item>
+        <item name="android:fontFamily">@font/space_grotesk</item>
+        <item name="android:alertDialogTheme">@style/Dialog</item>
+    </style>
+
+    <style name="Dialog" parent="android:Theme.Material.Dialog.Alert">
+        <item name="android:colorAccent">@color/ink</item>
+        <item name="android:windowBackground">@drawable/bg_panel</item>
+        <item name="android:fontFamily">@font/space_grotesk</item>
+    </style>
+
+    <!-- Type: Doto for big numbers, Space Grotesk for UI, JetBrains Mono for labels and metrics. -->
+    <style name="Text" />
+
+    <style name="Text.Display">
+        <item name="android:fontFamily">@font/doto_black</item>
+        <item name="android:textColor">@color/ink</item>
+        <item name="android:includeFontPadding">false</item>
+    </style>
+
+    <style name="Text.Body">
+        <item name="android:fontFamily">@font/space_grotesk</item>
+        <item name="android:textColor">@color/ink</item>
+        <item name="android:textSize">15sp</item>
+    </style>
+
+    <style name="Text.Secondary" parent="Text.Body">
+        <item name="android:textColor">@color/ink_secondary</item>
+        <item name="android:lineSpacingMultiplier">1.25</item>
+    </style>
+
+    <style name="Text.Label">
+        <item name="android:fontFamily">@font/jetbrains_mono</item>
+        <item name="android:textColor">@color/ink_secondary</item>
+        <item name="android:textSize">11sp</item>
+        <item name="android:letterSpacing">0.12</item>
+        <item name="android:textAllCaps">true</item>
+    </style>
+
+    <style name="Text.Metric">
+        <item name="android:fontFamily">@font/jetbrains_mono</item>
+        <item name="android:textColor">@color/ink</item>
+        <item name="android:textSize">13sp</item>
+        <item name="android:fontFeatureSettings">tnum</item>
+    </style>
+
+    <style name="Button" parent="android:Widget.Material.Button.Borderless">
+        <item name="android:minHeight">48dp</item>
+        <item name="android:paddingStart">22dp</item>
+        <item name="android:paddingEnd">22dp</item>
+        <item name="android:textAllCaps">false</item>
+        <item name="android:textSize">15sp</item>
+        <item name="android:fontFamily">@font/space_grotesk</item>
+        <item name="android:stateListAnimator">@null</item>
+        <item name="android:focusable">false</item>
+    </style>
+
+    <style name="Button.Primary">
+        <item name="android:background">@drawable/bg_button_primary</item>
+        <item name="android:textColor">@color/canvas</item>
+        <item name="android:fontFamily">@font/space_grotesk_semibold</item>
+    </style>
+
+    <style name="Button.Outline">
+        <item name="android:background">@drawable/bg_button_outline</item>
+        <item name="android:textColor">@color/ink</item>
+        <item name="android:fontFamily">@font/space_grotesk_medium</item>
     </style>
 </resources>

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Screeaner Dot: monochrome ink on black, one signal red. -->
+<resources>
+    <color name="canvas">#0A0A0A</color>
+    <color name="surface">#151515</color>
+    <color name="ink">#F2F2EF</color>
+    <color name="ink_secondary">#A6A6A2</color>
+    <color name="line">#24F2F2EF</color>
+    <color name="line_strong">#4DF2F2EF</color>
+    <!-- Only for what is live, recording or wrong. -->
+    <color name="signal">#E8352B</color>
+    <color name="panel">#EB0A0A0A</color>
+</resources>
