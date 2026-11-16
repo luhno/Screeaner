@@ -17,8 +17,8 @@ import java.util.ArrayList;
  */
 final class FecAssembler {
     interface Sink {
-        /** blob = [pts u64][encodeMicros u32][Annex-B access unit]. */
-        void onFrame(byte[] blob, int length, boolean key);
+        /** The rebuilt (still encrypted) frame and its id, which is also its decryption nonce. */
+        void onFrame(int frameId, byte[] blob, int length, boolean key);
 
         void onLoss();
     }
@@ -155,7 +155,7 @@ final class FecAssembler {
             nextExpected = frame.id + 1;
             waitingKey = false;
             lossPending = false;
-            sink.onFrame(frame.data, frame.size, frame.key);
+            sink.onFrame(frame.id, frame.data, frame.size, frame.key);
         } else {
             // An earlier frame is missing, so this one cannot be decoded.
             framesLost++;

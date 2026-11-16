@@ -109,6 +109,17 @@ class SessionRecorder(private val context: Context) {
         }
     }
 
+    /** Adds a comment line, e.g. the result of an end-to-end latency test. */
+    fun note(text: String) {
+        val out = writer ?: return
+        try {
+            out.write("# $text\n")
+            out.flush()
+        } catch (e: Exception) {
+            Log.w(TAG, "Recording failed", e)
+        }
+    }
+
     /** Closes the file, appends the summary and publishes a copy to Downloads when possible. */
     fun stop(): Summary? {
         val out = writer ?: return null

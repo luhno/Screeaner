@@ -52,7 +52,7 @@ public class FecAssemblerTest {
         final List<byte[]> frames = new ArrayList<>();
         int losses;
 
-        @Override public void onFrame(byte[] data, int length, boolean key) {
+        @Override public void onFrame(int frameId, byte[] data, int length, boolean key) {
             frames.add(Arrays.copyOf(data, length));
         }
 

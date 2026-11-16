@@ -1,6 +1,7 @@
 package app.screeaner
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
@@ -8,6 +9,8 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
+import android.graphics.RectF
 import android.view.InputDevice
 import android.view.KeyEvent
 import android.view.MotionEvent
@@ -23,11 +26,14 @@ import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.EditText
+import android.widget.LinearLayout
 import android.widget.Spinner
 import android.widget.TextView
 import java.util.Locale
 import java.util.UUID
 import kotlin.math.abs
+import kotlin.math.cos
+import kotlin.math.sin
 import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.roundToInt
@@ -61,6 +67,28 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
     @Volatile private var manualHost: String? = null
     private var deviceId = ""
     private var streaming = false
+    private lateinit var prefs: SharedPreferences
+    private lateinit var trust: TrustStore
+    private lateinit var shortcutBar: ShortcutBar
+    private lateinit var sidebar: View
+    private lateinit var clipboardBridge: ClipboardBridge
+    private lateinit var probe: LatencyProbe
+    private lateinit var measureButton: Button
+    private lateinit var pairingBox: View
+    private lateinit var pairingCode: TextView
+    private lateinit var pairingHint: TextView
+    private lateinit var pairingConfirm: Button
+    private lateinit var pairingCancel: Button
+    private var pairingReply: ((Boolean) -> Unit)? = null
+    private var pairingMac = "Mac"
+    private var deniedMessage: String? = null
+    private var deniedAt = 0L
+    private var optAudio = false
+    private var optClipboard = true
+    private var optPalm = true
+    private var optSidebar = false
+    private var optCtrlIsCmd = false
+    private var shortcuts: Set<String> = ShortcutBar.DEFAULT
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -79,7 +107,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
         discovery = Discovery(applicationContext)
         setUpMonitor()
 
-        val prefs = getPreferences(Context.MODE_PRIVATE)
+        prefs = getPreferences(Context.MODE_PRIVATE)
+        trust = TrustStore(applicationContext)
         manualHost = prefs.getString(PREF_HOST, null)
         // Stable identity: the Mac uses it to remember where this tablet's display sits.
         deviceId = prefs.getString(PREF_DEVICE_ID, null) ?: UUID.randomUUID().toString().also {
@@ -87,6 +116,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
         }
         hostInput.setText(manualHost ?: "")
         setUpDisplayOptions(prefs)
+        loadOptions()
+        setUpPairing()
+        setUpExtras()
         findViewById<Button>(R.id.connect).setOnClickListener {
             manualHost = hostInput.text.toString().trim()
             prefs.edit().putString(PREF_HOST, manualHost).apply()
@@ -100,10 +132,19 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
         touchSlop = ViewConfiguration.get(this).scaledTouchSlop.toFloat()
         surfaceView.setOnTouchListener { _, event -> onSurfaceTouch(event) }
         surfaceView.setOnHoverListener { view, event ->
-            if (event.actionMasked == MotionEvent.ACTION_HOVER_MOVE) {
-                client?.sendTouch(
-                    Protocol.ACTION_HOVER, event.x / view.width, event.y / view.height, 0f, Protocol.BUTTON_LEFT,
-                )
+            updatePen(event)
+            val x = event.x / max(1, view.width)
+            val y = event.y / max(1, view.height)
+            val isPen = currentTool != Protocol.TOOL_FINGER
+            val action = when (event.actionMasked) {
+                MotionEvent.ACTION_HOVER_ENTER -> if (isPen) Protocol.ACTION_PROXIMITY_IN else Protocol.ACTION_HOVER
+                MotionEvent.ACTION_HOVER_EXIT -> if (isPen) Protocol.ACTION_PROXIMITY_OUT else -1
+                MotionEvent.ACTION_HOVER_MOVE -> Protocol.ACTION_HOVER
+                else -> -1
+            }
+            if (isPen) penHovering = event.actionMasked != MotionEvent.ACTION_HOVER_EXIT
+            if (action >= 0) {
+                client?.sendTouch(action, x, y, 0f, Protocol.BUTTON_LEFT, tiltX, tiltY, currentTool)
             }
             true
         }
@@ -127,14 +168,157 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         val current = client
         if (current != null && streaming && !event.isSystem) {
+            var code = event.keyCode
+            if (optCtrlIsCmd) {
+                // PC keyboards: Ctrl+C / Ctrl+V and friends behave like on the Mac.
+                code = when (code) {
+                    KeyEvent.KEYCODE_CTRL_LEFT -> KeyEvent.KEYCODE_META_LEFT
+                    KeyEvent.KEYCODE_CTRL_RIGHT -> KeyEvent.KEYCODE_META_RIGHT
+                    KeyEvent.KEYCODE_META_LEFT -> KeyEvent.KEYCODE_CTRL_LEFT
+                    KeyEvent.KEYCODE_META_RIGHT -> KeyEvent.KEYCODE_CTRL_RIGHT
+                    else -> code
+                }
+            }
             when (event.action) {
-                KeyEvent.ACTION_DOWN -> current.sendKey(0, event.keyCode, event.repeatCount > 0)
-                KeyEvent.ACTION_UP -> current.sendKey(1, event.keyCode, false)
+                KeyEvent.ACTION_DOWN -> current.sendKey(0, code, event.repeatCount > 0, event.scanCode)
+                KeyEvent.ACTION_UP -> current.sendKey(1, code, false, event.scanCode)
             }
             return true
         }
         return super.dispatchKeyEvent(event)
     }
+
+    // region Options, pairing, shortcuts, clipboard and end-to-end probe
+
+    private fun loadOptions() {
+        optAudio = prefs.getBoolean(PREF_AUDIO, false)
+        optClipboard = prefs.getBoolean(PREF_CLIPBOARD, true)
+        optPalm = prefs.getBoolean(PREF_PALM, true)
+        optSidebar = prefs.getBoolean(PREF_SIDEBAR, false)
+        optCtrlIsCmd = prefs.getBoolean(PREF_CTRL_CMD, false)
+        shortcuts = prefs.getStringSet(PREF_SHORTCUTS, null)?.toSet() ?: ShortcutBar.DEFAULT
+    }
+
+    private fun setUpPairing() {
+        pairingBox = findViewById(R.id.pairingBox)
+        pairingCode = findViewById(R.id.pairingCode)
+        pairingHint = findViewById(R.id.pairingHint)
+        pairingConfirm = findViewById(R.id.pairingConfirm)
+        pairingCancel = findViewById(R.id.pairingCancel)
+        pairingConfirm.setOnClickListener { answerPairing(true) }
+        pairingCancel.setOnClickListener { answerPairing(false) }
+    }
+
+    private fun answerPairing(accepted: Boolean) {
+        val reply = pairingReply ?: return
+        pairingReply = null
+        pairingConfirm.visibility = View.GONE
+        pairingCancel.visibility = View.GONE
+        if (accepted) pairingHint.text = getString(R.string.pairing_waiting, pairingMac)
+        reply(accepted)
+    }
+
+    private fun setUpExtras() {
+        sidebar = findViewById(R.id.sidebarScroll)
+        shortcutBar = ShortcutBar(findViewById<LinearLayout>(R.id.sidebar)) { action, code ->
+            client?.sendKey(action, code, false)
+        }
+        shortcutBar.build(shortcuts)
+        clipboardBridge = ClipboardBridge(this) { text -> if (optClipboard) client?.sendClipboard(text) }
+        probe = LatencyProbe(surfaceView) { client }
+        measureButton = findViewById(R.id.measure)
+        measureButton.setOnClickListener { runProbe() }
+        findViewById<Button>(R.id.options).setOnClickListener { showOptions() }
+        findViewById<Button>(R.id.monitorOptions).setOnClickListener { showOptions() }
+    }
+
+    private fun applySidebar() {
+        sidebar.visibility = if (streaming && optSidebar) View.VISIBLE else View.GONE
+        if (!streaming) shortcutBar.releaseAll()
+    }
+
+    private fun showOptions() {
+        val values = booleanArrayOf(optAudio, optClipboard, optPalm, optSidebar, optCtrlIsCmd)
+        AlertDialog.Builder(this)
+            .setTitle(R.string.options_title)
+            .setMultiChoiceItems(R.array.option_labels, values) { _, index, checked -> values[index] = checked }
+            .setPositiveButton(R.string.ok) { _, _ ->
+                val reconnect = values[0] != optAudio || values[1] != optClipboard
+                optAudio = values[0]
+                optClipboard = values[1]
+                optPalm = values[2]
+                optSidebar = values[3]
+                optCtrlIsCmd = values[4]
+                prefs.edit()
+                    .putBoolean(PREF_AUDIO, optAudio).putBoolean(PREF_CLIPBOARD, optClipboard)
+                    .putBoolean(PREF_PALM, optPalm).putBoolean(PREF_SIDEBAR, optSidebar)
+                    .putBoolean(PREF_CTRL_CMD, optCtrlIsCmd)
+                    .apply()
+                applySidebar()
+                // Audio and clipboard are agreed when connecting.
+                if (reconnect) reconnect()
+            }
+            .setNeutralButton(R.string.options_shortcuts) { _, _ -> showShortcuts() }
+            .setNegativeButton(R.string.options_forget) { _, _ -> confirmForget() }
+            .show()
+    }
+
+    private fun showShortcuts() {
+        val all = ShortcutBar.ALL
+        val values = BooleanArray(all.size) { all[it].id in shortcuts }
+        AlertDialog.Builder(this)
+            .setTitle(R.string.shortcuts_title)
+            .setMultiChoiceItems(R.array.shortcut_labels, values) { _, index, checked -> values[index] = checked }
+            .setPositiveButton(R.string.ok) { _, _ ->
+                shortcuts = all.filterIndexed { index, _ -> values[index] }.map { it.id }.toSet()
+                prefs.edit().putStringSet(PREF_SHORTCUTS, shortcuts).apply()
+                shortcutBar.build(shortcuts)
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    private fun confirmForget() {
+        val known = trust.trustedMacs().joinToString(", ").ifEmpty { getString(R.string.forget_none) }
+        AlertDialog.Builder(this)
+            .setTitle(R.string.forget_title)
+            .setMessage(getString(R.string.forget_message, known))
+            .setPositiveButton(R.string.options_forget) { _, _ ->
+                trust.forgetMacs()
+                reconnect()
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    /** Drops the connection and starts over with the current settings. */
+    private fun reconnect() {
+        if (client == null) return
+        handler.removeCallbacks(restartClient)
+        client?.stop()
+        client = null
+        restartClient.run()
+    }
+
+    private fun runProbe() {
+        measureButton.isEnabled = false
+        recordInfo.text = getString(R.string.measuring)
+        probe.run { result ->
+            measureButton.isEnabled = true
+            if (result == null || result.samples.isEmpty()) {
+                recordInfo.text = getString(R.string.measure_failed)
+                return@run
+            }
+            val text = getString(
+                R.string.measure_result, format("%.1f", result.average), format("%.1f", result.minimum),
+                format("%.1f", result.p95), result.samples.size, result.attempts,
+            )
+            recordInfo.text = text
+            recorder.note(text)
+        }
+    }
+
+    // endregion
 
     // region Display mode (extension / main display / mirror)
 
@@ -179,12 +363,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
         displayPosition = position
         prefs.edit().putString(PREF_MODE, mode).putString(PREF_POSITION, position).apply()
         syncDisplaySpinners()
-        if (client != null) {
-            handler.removeCallbacks(restartClient)
-            client?.stop()
-            client = null
-            restartClient.run()
-        }
+        reconnect()
     }
 
     // endregion
@@ -321,6 +500,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
 
     override fun onDestroy() {
         if (recorder.isRecording) recorder.stop()
+        probe.release()
         super.onDestroy()
     }
 
@@ -342,11 +522,13 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
         super.onResume()
         enterImmersive()
         discovery.start()
+        clipboardBridge.start()
     }
 
     override fun onPause() {
         super.onPause()
         discovery.stop()
+        clipboardBridge.stop()
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -382,8 +564,20 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
         // Rotating between landscape and portrait resizes the surface a few
         // times; wait for it to settle, then (re)connect with the final size.
         handler.removeCallbacks(restartClient)
-        if (client?.hasSize(width, height) == true) return
-        handler.postDelayed(restartClient, if (client == null) 0L else ROTATION_SETTLE_MS)
+        handler.removeCallbacks(resizeClient)
+        val current = client ?: run {
+            handler.post(restartClient)
+            return
+        }
+        if (current.hasSize(width, height)) return
+        // Already connected (or connecting): the Mac resizes the display in
+        // place, keeping the pairing, the connection and the windows.
+        handler.postDelayed(resizeClient, ROTATION_SETTLE_MS)
+    }
+
+    private val resizeClient = Runnable {
+        val frame = surfaceView.holder.surfaceFrame
+        if (frame.width() > 0 && frame.height() > 0) client?.resize(frame.width(), frame.height())
     }
 
     private val restartClient = Runnable {
@@ -394,6 +588,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
         if (!holder.surface.isValid || width <= 0 || height <= 0) return@Runnable
         if (client?.hasSize(width, height) == true) return@Runnable
         client?.stop()
+        pairingReply = null
         val metrics = resources.displayMetrics
         val physicalDpi = metrics.xdpi.roundToInt()
         val dpi = if (physicalDpi in 80..800) physicalDpi else metrics.densityDpi
@@ -403,11 +598,16 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
             height = height,
             densityDpi = dpi,
             refreshRate = refreshRate,
-            deviceName = Build.MODEL ?: "Android",
-            deviceId = deviceId,
-            appVersion = appVersion,
-            displayMode = displayMode,
-            displayPosition = displayPosition,
+            options = ClientOptions(
+                deviceName = Build.MODEL ?: "Android",
+                deviceId = deviceId,
+                appVersion = appVersion,
+                displayMode = displayMode,
+                displayPosition = displayPosition,
+                audio = optAudio,
+                clipboard = optClipboard,
+            ),
+            trust = trust,
             discovery = discovery,
             manualHost = { manualHost },
             listener = this,
@@ -416,6 +616,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
         handler.removeCallbacks(restartClient)
+        handler.removeCallbacks(resizeClient)
         streaming = false
         client?.stop()
         client = null
@@ -428,24 +629,63 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
     override fun onState(state: StreamClient.State, detail: String) {
         runOnUiThread {
             streaming = state == StreamClient.State.STREAMING
+            if (state != StreamClient.State.PAIRING) {
+                pairingBox.visibility = View.GONE
+                pairingReply = null
+            }
             when (state) {
                 StreamClient.State.STREAMING -> {
                     overlay.visibility = View.GONE
-                    applyHudMode()
+                    deniedMessage = null
                 }
 
                 else -> {
                     overlay.visibility = View.VISIBLE
-                    applyHudMode()
-                    statusText.text = when (state) {
+                    var text = when (state) {
                         StreamClient.State.CONNECTING -> getString(R.string.status_connecting, detail)
+                        StreamClient.State.PAIRING -> getString(R.string.status_pairing, detail)
                         StreamClient.State.WAITING -> getString(R.string.status_waiting_stream)
                         else -> getString(R.string.status_searching)
                     }
+                    // Keep a refusal visible for a while instead of overwriting it at once.
+                    val denied = deniedMessage
+                    if (denied != null && SystemClock.uptimeMillis() - deniedAt < 15_000) text = "$denied\n$text"
+                    statusText.text = text
                 }
             }
+            applyHudMode()
+            applySidebar()
         }
     }
+
+    override fun onPairingCode(code: String, macName: String, reply: ((Boolean) -> Unit)?) {
+        runOnUiThread {
+            pairingMac = macName
+            pairingReply = reply
+            pairingBox.visibility = View.VISIBLE
+            pairingCode.text = if (code.length == 6) code.substring(0, 3) + " " + code.substring(3) else code
+            val ask = reply != null
+            pairingHint.text = getString(if (ask) R.string.pairing_compare else R.string.pairing_waiting, macName)
+            pairingConfirm.visibility = if (ask) View.VISIBLE else View.GONE
+            pairingCancel.visibility = if (ask) View.VISIBLE else View.GONE
+        }
+    }
+
+    override fun onDenied(reason: String) {
+        runOnUiThread {
+            pairingBox.visibility = View.GONE
+            pairingReply = null
+            deniedMessage = getString(R.string.pairing_denied, reason)
+            deniedAt = SystemClock.uptimeMillis()
+            statusText.text = deniedMessage
+        }
+    }
+
+    override fun onClipboard(text: String) {
+        runOnUiThread { if (optClipboard) clipboardBridge.apply(text) }
+    }
+
+    override fun onProbeInfo(area: RectF) = probe.onProbeInfo(area)
 
     override fun onSample(sample: StreamSample) {
         runOnUiThread { showSample(sample) }
@@ -485,6 +725,39 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
     private var lastSpan = 0f
     private val flushDown = Runnable { flushPendingDown() }
 
+    // Pen state: tool, tilt and when it was last seen (palm rejection).
+    private var currentTool = Protocol.TOOL_FINGER
+    private var tiltX = 0f
+    private var tiltY = 0f
+    private var penHovering = false
+    private var lastPenAt = 0L
+    private var ignoringPalm = false
+
+    /** Reads the tool and tilt of [event]'s first pointer. */
+    private fun updatePen(event: MotionEvent) {
+        currentTool = when (event.getToolType(0)) {
+            MotionEvent.TOOL_TYPE_STYLUS -> Protocol.TOOL_PEN
+            MotionEvent.TOOL_TYPE_ERASER -> Protocol.TOOL_ERASER
+            else -> Protocol.TOOL_FINGER
+        }
+        if (currentTool == Protocol.TOOL_FINGER) {
+            tiltX = 0f
+            tiltY = 0f
+            return
+        }
+        lastPenAt = SystemClock.uptimeMillis()
+        // Android: tilt = angle from perpendicular, orientation = direction it leans.
+        val tilt = event.getAxisValue(MotionEvent.AXIS_TILT)
+        val orientation = event.getAxisValue(MotionEvent.AXIS_ORIENTATION)
+        tiltX = (sin(tilt) * sin(orientation)).coerceIn(-1f, 1f)
+        tiltY = (-sin(tilt) * cos(orientation)).coerceIn(-1f, 1f)
+    }
+
+    /** A finger right after (or while) the pen is around is the hand resting on the screen. */
+    private fun isPalm(event: MotionEvent): Boolean =
+        optPalm && event.getToolType(0) == MotionEvent.TOOL_TYPE_FINGER &&
+            (penHovering || SystemClock.uptimeMillis() - lastPenAt < PALM_WINDOW_MS)
+
     private fun flushPendingDown() {
         if (!pendingDown) return
         pendingDown = false
@@ -496,7 +769,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
     private fun surfaceHeight() = max(1, surfaceView.height).toFloat()
 
     private fun send(action: Int, x: Float, y: Float, pressure: Float, button: Int = this.button) {
-        client?.sendTouch(action, x / surfaceWidth(), y / surfaceHeight(), pressure, button)
+        client?.sendTouch(action, x / surfaceWidth(), y / surfaceHeight(), pressure, button, tiltX, tiltY, currentTool)
     }
 
     private fun centroidX(event: MotionEvent) = (event.getX(0) + event.getX(1)) / 2
@@ -512,6 +785,13 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
     }
 
     private fun onSurfaceTouch(event: MotionEvent): Boolean {
+        if (event.actionMasked == MotionEvent.ACTION_DOWN && isPalm(event)) ignoringPalm = true
+        if (ignoringPalm) {
+            val end = event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL
+            if (end) ignoringPalm = false
+            return true
+        }
+        updatePen(event)
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 multiTouch = false
@@ -632,10 +912,17 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
 
     private companion object {
         const val PREF_HOST = "host"
+        const val PREF_AUDIO = "optAudio"
+        const val PREF_CLIPBOARD = "optClipboard"
+        const val PREF_PALM = "optPalm"
+        const val PREF_SIDEBAR = "optSidebar"
+        const val PREF_CTRL_CMD = "optCtrlIsCmd"
+        const val PREF_SHORTCUTS = "shortcuts"
+        const val PALM_WINDOW_MS = 600L
         const val PREF_MODE = "displayMode"
         const val PREF_POSITION = "displayPosition"
         /** Wire values, in the same order as R.array.display_modes / display_positions. */
-        val MODE_VALUES = listOf("extend", "main", "mirror")
+        val MODE_VALUES = listOf("extend", "main", "mirror", "only")
         val POSITION_VALUES = listOf("auto", "left", "right", "above", "below")
         const val HUD_OFF = 0
         const val HUD_COMPACT = 1
