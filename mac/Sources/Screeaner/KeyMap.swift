@@ -50,8 +50,38 @@ enum KeyMap {
             117: 55, 118: 54, // META left, right -> Command
         ]
         map.merge(others) { _, new in new }
+
+        // Numeric keypad: KEYCODE_NUMPAD_0 (144) ... KEYCODE_NUMPAD_9 (153)
+        let keypad: [CGKeyCode] = [82, 83, 84, 85, 86, 87, 88, 89, 91, 92]
+        for (offset, code) in keypad.enumerated() { map[144 + offset] = code }
+        let keypadOthers: [Int: CGKeyCode] = [
+            154: 75,  // NUMPAD_DIVIDE
+            155: 67,  // NUMPAD_MULTIPLY
+            156: 78,  // NUMPAD_SUBTRACT
+            157: 69,  // NUMPAD_ADD
+            158: 65,  // NUMPAD_DOT
+            159: 95,  // NUMPAD_COMMA (ABNT2 keypad ",") -> kVK_JIS_KeypadComma
+            161: 81,  // NUMPAD_EQUALS
+            143: 71,  // NUM_LOCK -> Clear
+            // ABNT2 "/ ?" key next to right Shift (Linux KEY_RO) -> kVK_JIS_Underscore,
+            // which the Brazilian layouts on macOS turn into "/" and "?".
+            217: 94,
+            // Volume and media keys some keyboards send.
+            24: 72, 25: 73, 164: 74, // VOLUME_UP, VOLUME_DOWN, VOLUME_MUTE
+        ]
+        map.merge(keypadOthers) { _, new in new }
         return map
     }()
+
+    /// Linux scan code of the extra ISO key left of Z ("\ |" on ABNT2), which
+    /// Android reports with the same key code as the ANSI backslash.
+    static let isoExtraScanCode = 86
+    static let isoSection: CGKeyCode = 10
+
+    static func macKey(androidKeyCode: Int, scanCode: Int) -> CGKeyCode? {
+        if scanCode == isoExtraScanCode { return isoSection }
+        return mac[androidKeyCode]
+    }
 
     static func modifier(for key: CGKeyCode) -> CGEventFlags? {
         switch key {

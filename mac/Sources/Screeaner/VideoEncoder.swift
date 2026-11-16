@@ -19,6 +19,8 @@ enum EncoderError: LocalizedError {
 final class VideoEncoder {
     private var session: VTCompressionSession?
     private let codec: Codec
+    let width: Int
+    let height: Int
     private var forceKey = true
     private static let startCode: [UInt8] = [0, 0, 0, 1]
 
@@ -27,6 +29,8 @@ final class VideoEncoder {
 
     init(width: Int, height: Int, codec: Codec, fps: Int, bitrate: Int) throws {
         self.codec = codec
+        self.width = width
+        self.height = height
         let codecType = codec == .hevc ? kCMVideoCodecType_HEVC : kCMVideoCodecType_H264
 
         let lowLatencySpec: [CFString: Any] = [

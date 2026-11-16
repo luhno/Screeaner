@@ -5,6 +5,8 @@ import Foundation
 final class AdbBridge {
     private let queue = DispatchQueue(label: "screeaner.adb", qos: .utility)
     private var busy = false
+    /// Devices we already opened the app on (adb queue only).
+    private var launched = Set<String>()
 
     static let adbPath: String? = {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
@@ -16,8 +18,9 @@ final class AdbBridge {
         return candidates.first { FileManager.default.isExecutableFile(atPath: $0) }
     }()
 
-    /// Forwards the port on every attached device. Completion (main queue) gets the device count.
-    func refresh(completion: @escaping (Int) -> Void) {
+    /// Forwards the port on every attached device and, if asked, opens the
+    /// Screeaner app on devices that just appeared. Completion (main queue) gets the device count.
+    func refresh(openApp: Bool = false, completion: @escaping (Int) -> Void) {
         guard let adb = Self.adbPath else {
             completion(0)
             return
@@ -36,7 +39,12 @@ final class AdbBridge {
             for serial in serials {
                 let port = "tcp:\(Proto.port)"
                 if Self.run(adb, ["-s", serial, "reverse", port, port]) != nil { ready += 1 }
+                if openApp, !self.launched.contains(serial) {
+                    _ = Self.run(adb, ["-s", serial, "shell", "am", "start", "-n", "app.screeaner/.MainActivity"])
+                }
             }
+            // Forget unplugged devices so they open again next time.
+            self.launched = Set(serials)
             DispatchQueue.main.async { completion(ready) }
         }
     }

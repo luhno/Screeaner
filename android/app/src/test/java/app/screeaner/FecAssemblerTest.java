@@ -2,12 +2,14 @@ package app.screeaner;
 
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Random;
 import org.junit.Test;
 
 public class FecAssemblerTest {
@@ -16,15 +18,12 @@ public class FecAssemblerTest {
         int size = blob.length;
         int k = Math.max(1, (size + 1199) / 1200);
         int shard = (size + k - 1) / k;
-        int m = Math.min(k, Math.max(1, (int) Math.ceil(k * redundancy)));
-        byte[][] shards = new byte[k + m][shard];
-        for (int i = 0; i < k; i++) {
-            int offset = i * shard;
-            System.arraycopy(blob, offset, shards[i], 0, Math.min(shard, size - offset));
-            for (int b = 0; b < shard; b++) shards[k + i % m][b] ^= shards[i][b];
-        }
+        int m = ReedSolomon.parityCount(k, redundancy);
+        byte[] shards = new byte[(k + m) * shard];
+        System.arraycopy(blob, 0, shards, 0, size);
+        ReedSolomon.encode(shards, shard, k, m);
         List<byte[]> packets = new ArrayList<>();
-        for (int i = 0; i < k + m; i++) {
+        for (int i : ReedSolomon.sendOrder(k, m)) {
             byte[] p = new byte[FecAssembler.HEADER + shard];
             p[0] = (byte) (frameId >>> 24); p[1] = (byte) (frameId >>> 16); p[2] = (byte) (frameId >>> 8); p[3] = (byte) frameId;
             p[4] = (byte) (i >>> 8); p[5] = (byte) i;
@@ -33,10 +32,14 @@ public class FecAssemblerTest {
             p[10] = (byte) (key ? 1 : 0);
             p[11] = FecAssembler.VERSION;
             p[12] = (byte) (size >>> 24); p[13] = (byte) (size >>> 16); p[14] = (byte) (size >>> 8); p[15] = (byte) size;
-            System.arraycopy(shards[i], 0, p, FecAssembler.HEADER, shard);
+            System.arraycopy(shards, i * shard, p, FecAssembler.HEADER, shard);
             packets.add(p);
         }
         return packets;
+    }
+
+    static int index(byte[] packet) {
+        return ((packet[4] & 0xFF) << 8) | (packet[5] & 0xFF);
     }
 
     static byte[] blob(int size, int seed) {
@@ -49,7 +52,7 @@ public class FecAssemblerTest {
         final List<byte[]> frames = new ArrayList<>();
         int losses;
 
-        @Override public void onFrame(byte[] data, int length, boolean key) {
+        @Override public void onFrame(int frameId, byte[] data, int length, boolean key) {
             frames.add(Arrays.copyOf(data, length));
         }
 
@@ -58,29 +61,49 @@ public class FecAssemblerTest {
         }
     }
 
-    private static void feed(FecAssembler assembler, List<byte[]> packets, int... dropped) {
-        for (int i = 0; i < packets.size(); i++) {
+    /** Feeds every packet whose shard index is not in {@code droppedIndexes}. */
+    private static void feed(FecAssembler assembler, List<byte[]> packets, int... droppedIndexes) {
+        for (byte[] p : packets) {
             boolean skip = false;
-            for (int d : dropped) skip |= d == i;
-            if (!skip) assembler.onPacket(packets.get(i), packets.get(i).length, 0);
+            for (int d : droppedIndexes) skip |= d == index(p);
+            if (!skip) assembler.onPacket(p, p.length, 0);
         }
     }
 
     /** The Swift test checks the same digest, proving both ends agree on the wire format. */
     @Test public void referenceVector() throws Exception {
         MessageDigest digest = MessageDigest.getInstance("SHA-256");
-        for (byte[] p : packetize(7, blob(5000, 7), true, 0.2)) digest.update(p);
+        for (byte[] p : packetize(7, blob(50_000, 7), true, 0.2)) digest.update(p);
         StringBuilder hex = new StringBuilder();
         for (byte b : digest.digest()) hex.append(String.format("%02x", b));
-        assertEquals("f700487071335eff360ac5a786f298ea16eab22e04f7bff1d57b032f48e901c4", hex.toString());
+        assertEquals("a3b687fbaffbc7cd73fcbc8f53b4f60858173267adef2d7cb6e01f7183944a69", hex.toString());
+    }
+
+    @Test public void fieldArithmetic() {
+        for (int a = 1; a < 256; a++) assertEquals(1, ReedSolomon.mul(a, ReedSolomon.inv(a)));
+        assertEquals(0, ReedSolomon.mul(0, 77));
+    }
+
+    @Test public void layoutCoversEveryShardOnce() {
+        for (int k : new int[] {1, 2, 31, 32, 33, 100, 834}) {
+            int m = ReedSolomon.parityCount(k, 0.2);
+            int[] order = ReedSolomon.sendOrder(k, m);
+            boolean[] seen = new boolean[k + m];
+            for (int i : order) {
+                assertFalse(seen[i]);
+                seen[i] = true;
+            }
+            assertEquals(k + m, order.length);
+        }
     }
 
     @Test public void deliversWithoutLoss() {
         Recorder sink = new Recorder();
         FecAssembler assembler = new FecAssembler(sink);
-        for (int size : new int[] {13, 1200, 1201, 5000, 150_000}) {
+        int id = 1;
+        for (int size : new int[] {13, 1200, 1201, 5000, 150_000, 1_000_000}) {
             sink.frames.clear();
-            feed(assembler, packetize(size, blob(size, size), true, 0.2));
+            feed(assembler, packetize(id++, blob(size, size), true, 0.2));
             assertEquals(1, sink.frames.size());
             assertArrayEquals(blob(size, size), sink.frames.get(0));
         }
@@ -88,25 +111,52 @@ public class FecAssemblerTest {
         assertEquals(0, assembler.takeStats()[1]);
     }
 
-    @Test public void repairsBurstUpToParityCount() {
+    @Test public void repairsScatteredLosses() {
         Recorder sink = new Recorder();
         FecAssembler assembler = new FecAssembler(sink);
-        byte[] data = blob(30_000, 3); // k = 25, m = 5
-        feed(assembler, packetize(1, data, true, 0.2), 9, 10, 11, 12, 13);
+        byte[] data = blob(30_000, 3); // k = 25, m = 5, one block
+        // Five losses anywhere (XOR parity could not repair two in the same group).
+        feed(assembler, packetize(1, data, true, 0.2), 0, 5, 10, 15, 26);
         assertEquals(1, sink.frames.size());
         assertArrayEquals(data, sink.frames.get(0));
-        // Losing the tiny single-shard frame's data packet is repaired by its parity copy.
-        byte[] small = blob(40, 9);
+
+        byte[] small = blob(40, 9); // a single shard is simply duplicated
         feed(assembler, packetize(2, small, false, 0.2), 0);
         assertArrayEquals(small, sink.frames.get(1));
+    }
+
+    @Test public void repairsRandomLossesInEveryBlock() {
+        Random random = new Random(42);
+        Recorder sink = new Recorder();
+        FecAssembler assembler = new FecAssembler(sink);
+        for (int round = 0; round < 40; round++) {
+            byte[] data = blob(20_000 + random.nextInt(400_000), round);
+            List<byte[]> packets = packetize(round + 1, data, true, 0.25);
+            int k = Math.max(1, (data.length + 1199) / 1200);
+            int m = ReedSolomon.parityCount(k, 0.25);
+            List<Integer> dropped = new ArrayList<>();
+            for (int j = 0; j < ReedSolomon.blocks(k); j++) {
+                int kj = ReedSolomon.blockData(k, j);
+                int mj = ReedSolomon.blockParity(k, m, j);
+                List<Integer> members = new ArrayList<>();
+                for (int c = 0; c < kj; c++) members.add(ReedSolomon.blockDataStart(k, j) + c);
+                for (int r = 0; r < mj; r++) members.add(ReedSolomon.blockParityStart(k, m, j) + r);
+                java.util.Collections.shuffle(members, random);
+                dropped.addAll(members.subList(0, random.nextInt(mj + 1)));
+            }
+            feed(assembler, packets, dropped.stream().mapToInt(Integer::intValue).toArray());
+            assertEquals(round + 1, sink.frames.size());
+            assertArrayEquals(data, sink.frames.get(round));
+        }
+        assertEquals(0, sink.losses);
     }
 
     @Test public void unrecoverableFrameWaitsForKeyframe() {
         Recorder sink = new Recorder();
         FecAssembler assembler = new FecAssembler(sink);
         feed(assembler, packetize(1, blob(3000, 1), true, 0.2));
-        feed(assembler, packetize(2, blob(30_000, 2), false, 0.2), 0, 5); // same group twice: lost
-        feed(assembler, packetize(3, blob(3000, 3), false, 0.2));         // undecodable without 2
+        feed(assembler, packetize(2, blob(30_000, 2), false, 0.2), 0, 1, 2, 3, 4, 5); // 6 losses > 5 parity
+        feed(assembler, packetize(3, blob(3000, 3), false, 0.2));                   // undecodable without 2
         assertEquals(1, sink.frames.size());
         assertTrue(sink.losses > 0);
         feed(assembler, packetize(4, blob(3000, 4), false, 0.2));
@@ -122,7 +172,7 @@ public class FecAssemblerTest {
         Recorder sink = new Recorder();
         FecAssembler assembler = new FecAssembler(sink);
         feed(assembler, packetize(1, blob(3000, 1), true, 0.2));
-        feed(assembler, packetize(2, blob(30_000, 2), false, 0.2), 0, 5);
+        feed(assembler, packetize(2, blob(30_000, 2), false, 0.2), 0, 1, 2, 3, 4, 5);
         assertEquals(0, sink.losses);
         assembler.onIdle(100_000_000L);
         assertEquals(1, sink.losses);

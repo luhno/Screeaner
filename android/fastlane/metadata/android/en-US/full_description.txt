@@ -1,0 +1,28 @@
+Screeaner turns your Android tablet into a real second display for macOS, built for minimal latency.
+
+The Mac app creates a virtual display that matches the tablet's screen, encodes it in hardware and streams it to the tablet, which decodes and shows every frame immediately. Touch, stylus, keyboard and mouse on the tablet are sent back to the Mac.
+
+<b>Connection</b>
+• USB: lowest latency and no jitter (via USB debugging)
+• Wi-Fi: the tablet finds your Mac on the local network automatically
+• Pairing with a code and encrypted connection
+
+<b>Display modes</b>
+• Extension: extra desktop space, placed where you want it
+• Main display: the menu bar and Dock move to the tablet
+• Mirror: the tablet shows the Mac's screen
+• Tablet only: use just the tablet as the screen
+
+<b>Input</b>
+• Stylus with pressure and tilt
+• Gestures: two-finger scroll, pinch to zoom, two-finger tap for right click
+• Keyboard and mouse attached to the tablet control the Mac
+
+<b>More</b>
+• Mac audio on the tablet
+• Shared clipboard
+• Portrait and landscape
+• Several tablets at once
+• On-screen latency and performance monitor
+
+Requires the Screeaner app on the Mac (macOS 13 or later), available on GitHub.

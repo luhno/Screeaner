@@ -4,38 +4,39 @@ import java.util.ArrayList;
 
 /**
  * Rebuilds video frames from UDP datagrams and repairs losses with the
- * interleaved XOR parity the Mac adds to every frame.
+ * Reed-Solomon parity the Mac adds to every frame (see {@link ReedSolomon}).
  *
  * Datagram: [frameId u32][index u16][k u16][m u16][flags u8][version u8][frameSize u32][shard].
  * A frame is split into k equal data shards (the last one zero padded) plus
- * m parity shards; parity j is the XOR of every data shard i with i % m == j.
- * One lost shard per group can be rebuilt, so a burst of up to m consecutive
- * losses is fully recovered.
+ * m parity shards, grouped in blocks of up to 32 data shards. A block is
+ * rebuilt as soon as it received as many shards as it has data shards,
+ * whichever ones were lost.
  *
  * Frames are only delivered in order; when one is lost for good, delivery
  * pauses until the next keyframe and {@link Sink#onLoss()} asks for it.
  */
 final class FecAssembler {
     interface Sink {
-        /** blob = [pts u64][encodeMicros u32][Annex-B access unit]. */
-        void onFrame(byte[] blob, int length, boolean key);
+        /** The rebuilt (still encrypted) frame and its id, which is also its decryption nonce. */
+        void onFrame(int frameId, byte[] blob, int length, boolean key);
 
         void onLoss();
     }
 
     static final int HEADER = 16;
-    static final int VERSION = 1;
+    static final int VERSION = 2;
     private static final int MAX_SHARD = 1400;
     private static final int MAX_FRAME = 8 * 1024 * 1024;
     private static final int MAX_PENDING = 8;
     private static final long STALE_NANOS = 60_000_000L;
 
     private static final class Frame {
-        int id, k, m, shard, size, received;
+        int id, k, m, shard, size, received, blocks;
         boolean key;
         byte[] data;
         boolean[] have;
-        int[] missing;
+        int[] blockOf;
+        int[] blockReceived;
         long firstNanos;
     }
 
@@ -60,7 +61,8 @@ final class FecAssembler {
         boolean key = (buf[10] & 1) != 0;
         int size = ((buf[12] & 0xFF) << 24) | ((buf[13] & 0xFF) << 16) | ((buf[14] & 0xFF) << 8) | (buf[15] & 0xFF);
         int shard = length - HEADER;
-        if (k < 1 || m < 1 || index >= k + m || size < 1 || size > MAX_FRAME || shard > MAX_SHARD) return;
+        if (k < 1 || m < ReedSolomon.blocks(k) || m > k || index >= k + m) return;
+        if (size < 1 || size > MAX_FRAME || shard > MAX_SHARD) return;
         if (shard != (size + k - 1) / k) return;
 
         packetsReceived++;
@@ -84,8 +86,15 @@ final class FecAssembler {
             frame.key = key;
             frame.data = new byte[(k + m) * shard];
             frame.have = new boolean[k + m];
-            frame.missing = new int[m];
-            for (int i = 0; i < k; i++) frame.missing[i % m]++;
+            frame.blocks = ReedSolomon.blocks(k);
+            frame.blockReceived = new int[frame.blocks];
+            frame.blockOf = new int[k + m];
+            for (int j = 0; j < frame.blocks; j++) {
+                int ds = ReedSolomon.blockDataStart(k, j);
+                for (int c = 0; c < ReedSolomon.blockData(k, j); c++) frame.blockOf[ds + c] = j;
+                int ps = ReedSolomon.blockParityStart(k, m, j);
+                for (int r = 0; r < ReedSolomon.blockParity(k, m, j); r++) frame.blockOf[ps + r] = j;
+            }
             frame.firstNanos = nowNanos;
             pending.add(frame);
         } else if (frame.k != k || frame.m != m || frame.shard != shard) {
@@ -95,7 +104,7 @@ final class FecAssembler {
         System.arraycopy(buf, HEADER, frame.data, index * shard, shard);
         frame.have[index] = true;
         frame.received++;
-        if (index < k) frame.missing[index % m]--;
+        frame.blockReceived[frame.blockOf[index]]++;
 
         if (isRecoverable(frame)) finish(frame);
     }
@@ -125,16 +134,16 @@ final class FecAssembler {
     }
 
     private static boolean isRecoverable(Frame frame) {
-        for (int j = 0; j < frame.m; j++) {
-            if (frame.missing[j] == 0) continue;
-            if (frame.missing[j] == 1 && frame.have[frame.k + j]) continue;
-            return false;
+        for (int j = 0; j < frame.blocks; j++) {
+            if (frame.blockReceived[j] < ReedSolomon.blockData(frame.k, j)) return false;
         }
         return true;
     }
 
     private void finish(Frame frame) {
-        repair(frame);
+        for (int j = 0; j < frame.blocks; j++) {
+            ReedSolomon.decodeBlock(frame.data, frame.shard, frame.have, frame.k, frame.m, j);
+        }
         pending.remove(frame);
         packetsExpected += frame.k + frame.m;
 
@@ -146,7 +155,7 @@ final class FecAssembler {
             nextExpected = frame.id + 1;
             waitingKey = false;
             lossPending = false;
-            sink.onFrame(frame.data, frame.size, frame.key);
+            sink.onFrame(frame.id, frame.data, frame.size, frame.key);
         } else {
             // An earlier frame is missing, so this one cannot be decoded.
             framesLost++;
@@ -156,31 +165,6 @@ final class FecAssembler {
             waitingKey = true;
             lossPending = true;
             sink.onLoss();
-        }
-    }
-
-    private static void repair(Frame frame) {
-        byte[] data = frame.data;
-        int shard = frame.shard;
-        for (int j = 0; j < frame.m; j++) {
-            if (frame.missing[j] != 1) continue;
-            int lost = -1;
-            for (int i = j; i < frame.k; i += frame.m) {
-                if (!frame.have[i]) {
-                    lost = i;
-                    break;
-                }
-            }
-            if (lost < 0) continue;
-            int target = lost * shard;
-            System.arraycopy(data, (frame.k + j) * shard, data, target, shard);
-            for (int i = j; i < frame.k; i += frame.m) {
-                if (i == lost) continue;
-                int source = i * shard;
-                for (int b = 0; b < shard; b++) data[target + b] ^= data[source + b];
-            }
-            frame.have[lost] = true;
-            frame.missing[j] = 0;
         }
     }
 

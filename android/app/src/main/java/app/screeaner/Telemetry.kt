@@ -18,6 +18,8 @@ data class StreamInfo(
     val fps: Int,
     val macName: String,
     val macVersion: String,
+    /** Display mode the Mac actually applied: extend, main or mirror. */
+    val mode: String,
 )
 
 /** One second of stream measurements. Latencies are NaN while the clocks are not synced yet. */

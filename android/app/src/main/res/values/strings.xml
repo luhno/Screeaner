@@ -4,9 +4,69 @@
     <string name="status_searching">Procurando o Mac…</string>
     <string name="status_connecting">Conectando a %1$s…</string>
     <string name="status_waiting_stream">Conectado. Aguardando vídeo…</string>
-    <string name="help">Abra o Screeaner no Mac.\n\nUSB (menor latência): ative a Depuração USB e conecte o cabo.\nWi‑Fi: mantenha Mac e tablet na mesma rede.\n\nDois dedos: rolar · Pinça: zoom · Toque com dois dedos: clique direito\nToque com três dedos: monitor de latência e desempenho · Gire o tablet para usar em retrato\nTeclado e mouse ligados ao tablet controlam o Mac</string>
+    <string name="help">Abra o Screeaner no Mac.\n\nUSB (menor latência): ative a Depuração USB e conecte o cabo.\nWi‑Fi: mantenha Mac e tablet na mesma rede.\n\nDois dedos: rolar · Pinça: zoom · Toque com dois dedos: clique direito\nToque com três dedos: monitor de latência e desempenho · Gire o tablet para usar em retrato\nTeclado e mouse ligados ao tablet controlam o Mac · Na primeira conexão, confira o código mostrado nas duas telas</string>
+    <string name="status_pairing">Pareando com %1$s…</string>
+    <string name="pairing_confirm">O código é o mesmo</string>
+    <string name="pairing_cancel">Cancelar</string>
+    <string name="pairing_compare">Confira se o Mac “%1$s” mostra este mesmo código.</string>
+    <string name="pairing_waiting">Aprove no Mac “%1$s”, que mostra este mesmo código.</string>
+    <string name="pairing_denied">Conexão recusada: %1$s</string>
+    <string name="options">Opções</string>
+    <string name="options_title">Opções do Screeaner</string>
+    <string-array name="option_labels">
+        <item>Áudio do Mac no tablet</item>
+        <item>Compartilhar área de transferência (texto)</item>
+        <item>Ignorar a palma da mão ao usar a caneta</item>
+        <item>Barra de atalhos na lateral</item>
+        <item>Ctrl do teclado funciona como ⌘</item>
+    </string-array>
+    <string name="options_shortcuts">Atalhos…</string>
+    <string name="options_forget">Esquecer Macs</string>
+    <string name="shortcuts_title">Botões da barra de atalhos</string>
+    <string-array name="shortcut_labels">
+        <item>⌘ Command (fixa)</item>
+        <item>⌥ Option (fixa)</item>
+        <item>⌃ Control (fixa)</item>
+        <item>⇧ Shift (fixa)</item>
+        <item>↶ Desfazer (⌘Z)</item>
+        <item>↷ Refazer (⇧⌘Z)</item>
+        <item>Copiar (⌘C)</item>
+        <item>Colar (⌘V)</item>
+        <item>Salvar (⌘S)</item>
+        <item>Esc</item>
+        <item>Apagar (⌫)</item>
+        <item>Trocar de app (⌘⇥)</item>
+        <item>Mission Control (⌃↑)</item>
+        <item>Spotlight (⌘ espaço)</item>
+        <item>Ampliar (⌘+)</item>
+        <item>Reduzir (⌘−)</item>
+    </string-array>
+    <string name="forget_title">Esquecer os Macs pareados?</string>
+    <string name="forget_message">Na próxima conexão, o tablet e o Mac vão mostrar um código para você confirmar de novo. Macs conhecidos: %1$s</string>
+    <string name="forget_none">nenhum</string>
+    <string name="cancel">Cancelar</string>
+    <string name="ok">OK</string>
+    <string name="measure">Medir ponta a ponta</string>
+    <string name="measuring">Medindo… não toque na tela</string>
+    <string name="measure_failed">Não foi possível medir (o Mac precisa da versão 0.4 ou mais nova)</string>
+    <string name="measure_result">Ponta a ponta (Mac desenha → tablet mostra, ida e volta): média %1$s ms · mín %2$s · p95 %3$s (%4$d de %5$d)</string>
     <string name="host_hint">IP do Mac (opcional)</string>
     <string name="connect">Conectar</string>
+    <string name="display_header">EXIBIÇÃO NO MAC</string>
+    <string name="display_hint">Extensão: mais área de trabalho · Monitor principal: barra de menus e Dock vão para o tablet · Espelhar: o tablet mostra a tela do Mac · Só o tablet: tudo vai para o tablet e a tela do Mac é apagada</string>
+    <string-array name="display_modes">
+        <item>Extensão</item>
+        <item>Monitor principal</item>
+        <item>Espelhar o Mac</item>
+        <item>Só o tablet</item>
+    </string-array>
+    <string-array name="display_positions">
+        <item>Posição do macOS</item>
+        <item>À esquerda do Mac</item>
+        <item>À direita do Mac</item>
+        <item>Acima do Mac</item>
+        <item>Abaixo do Mac</item>
+    </string-array>
     <string name="monitor_latency">LATÊNCIA</string>
     <string name="monitor_performance">DESEMPENHO</string>
     <string name="record_start">● Gravar sessão de teste</string>

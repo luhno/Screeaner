@@ -1,0 +1,142 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  mac:
+    runs-on: macos-15
+    env:
+      MACOS_CERT_P12_BASE64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+      MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Import Developer ID certificate
+        run: |
+          if [ -z "$MACOS_CERT_P12_BASE64" ] || [ -z "$MACOS_CERT_PASSWORD" ] || \
+             [ -z "$APPLE_ID" ] || [ -z "$APPLE_TEAM_ID" ] || [ -z "$APPLE_APP_PASSWORD" ]; then
+            echo "::notice::Signing secrets not set; building with an ad-hoc signature (no notarization)."
+            exit 0
+          fi
+          KEYCHAIN="$RUNNER_TEMP/release.keychain-db"
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+          echo "$MACOS_CERT_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" -P "$MACOS_CERT_PASSWORD" \
+            -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" > /dev/null
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+          rm -f "$RUNNER_TEMP/cert.p12"
+          IDENTITY="$(security find-identity -v -p codesigning "$KEYCHAIN" \
+            | grep -o '"Developer ID Application: [^"]*"' | head -n 1 | tr -d '"')"
+          if [ -z "$IDENTITY" ]; then
+            echo "::error::No 'Developer ID Application' identity found in MACOS_CERT_P12_BASE64."
+            exit 1
+          fi
+          echo "CODESIGN_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
+          echo "RELEASE_KEYCHAIN=$KEYCHAIN" >> "$GITHUB_ENV"
+          echo "NOTARIZE=1" >> "$GITHUB_ENV"
+
+      - name: Build app bundle
+        working-directory: mac
+        run: ./scripts/bundle.sh
+
+      - name: Notarize and staple
+        if: env.NOTARIZE == '1'
+        working-directory: mac/build
+        run: |
+          ditto -c -k --keepParent Screeaner.app notarize.zip
+          xcrun notarytool submit notarize.zip \
+            --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" \
+            --wait
+          xcrun stapler staple Screeaner.app
+          rm notarize.zip
+
+      - name: Zip
+        working-directory: mac/build
+        run: ditto -c -k --keepParent Screeaner.app Screeaner-mac.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Screeaner-mac
+          path: mac/build/Screeaner-mac.zip
+
+      - name: Remove temporary keychain
+        if: always() && env.RELEASE_KEYCHAIN != ''
+        run: security delete-keychain "$RELEASE_KEYCHAIN"
+
+  android:
+    runs-on: ubuntu-latest
+    env:
+      ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      SCREEANER_KEYSTORE_PASSWORD: ${{ secrets.SCREEANER_KEYSTORE_PASSWORD }}
+      SCREEANER_KEY_ALIAS: ${{ secrets.SCREEANER_KEY_ALIAS }}
+      SCREEANER_KEY_PASSWORD: ${{ secrets.SCREEANER_KEY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Decode keystore
+        run: |
+          if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "::notice::ANDROID_KEYSTORE_BASE64 not set; release builds are signed with the debug key."
+            exit 0
+          fi
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release.jks"
+          echo "SCREEANER_KEYSTORE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+
+      - name: Build release APK and AAB
+        working-directory: android
+        run: ./gradlew assembleRelease bundleRelease --no-daemon
+
+      - name: Collect outputs
+        run: |
+          mkdir -p dist
+          cp android/app/build/outputs/apk/release/app-release.apk dist/Screeaner-android.apk
+          cp android/app/build/outputs/bundle/release/app-release.aab dist/Screeaner-android.aab
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Screeaner-android
+          path: dist/*
+
+      - name: Remove keystore
+        if: always()
+        run: rm -f "$RUNNER_TEMP/release.jks"
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [mac, android]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            dist/Screeaner-mac.zip
+            dist/Screeaner-android.apk
+            dist/Screeaner-android.aab
