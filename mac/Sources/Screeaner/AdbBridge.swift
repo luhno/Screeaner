@@ -49,6 +49,40 @@ final class AdbBridge {
         }
     }
 
+    /// Installs the APK on the attached device whose model is `model` and
+    /// reopens the app. Completion (main queue) gets whether it worked. It is
+    /// skipped (false) when the model is not attached or more than one device has it.
+    func install(_ apk: URL, model: String, completion: @escaping (Bool) -> Void) {
+        guard let adb = Self.adbPath else {
+            completion(false)
+            return
+        }
+        queue.async {
+            let listing = Self.run(adb, ["devices"]) ?? ""
+            let serials = listing.split(separator: "\n").dropFirst().compactMap { line -> String? in
+                let parts = line.split(separator: "\t")
+                return parts.count == 2 && parts[1] == "device" ? String(parts[0]) : nil
+            }
+            let matching = serials.filter { serial in
+                let reported = Self.run(adb, ["-s", serial, "shell", "getprop", "ro.product.model"]) ?? ""
+                return reported.trimmingCharacters(in: .whitespacesAndNewlines) == model
+            }
+            guard matching.count == 1, let serial = matching.first else {
+                DispatchQueue.main.async { completion(false) }
+                return
+            }
+            // -r keeps the app's data; adb fails if the signature does not match.
+            let installed = (Self.run(adb, ["-s", serial, "install", "-r", apk.path]) ?? "").contains("Success")
+            if installed {
+                _ = Self.run(adb, ["-s", serial, "shell", "am", "start", "-n", "app.screeaner/.MainActivity"])
+                // The reinstall drops the reverse forward; set it up again.
+                let port = "tcp:\(Proto.port)"
+                _ = Self.run(adb, ["-s", serial, "reverse", port, port])
+            }
+            DispatchQueue.main.async { completion(installed) }
+        }
+    }
+
     /// Returns stdout on success, nil on failure.
     private static func run(_ executable: String, _ arguments: [String]) -> String? {
         let process = Process()

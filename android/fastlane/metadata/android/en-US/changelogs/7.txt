@@ -1,0 +1,8 @@
+0.7.0
+• Pairing with a code and end-to-end encryption
+• Reed-Solomon error correction on Wi-Fi
+• Stylus as a graphics tablet, palm rejection and a shortcut bar
+• Mac audio, shared clipboard and ABNT2 keyboards
+• Modes: extend, main display, mirror and tablet only
+• Touch-to-screen test, benchmark and updates pushed by the Mac
+• New Screeaner Dot look

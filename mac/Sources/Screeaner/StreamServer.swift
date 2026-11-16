@@ -19,6 +19,10 @@ final class ClientConnection {
     private var closed = false
     private var secure: SecureChannel.Session?   // set under sendLock; read on `queue` after that
     private var receiving: SecureChannel.Session?  // `queue` only
+    /// A tablet app from before the secure protocol: only the update messages
+    /// may flow, in the clear (Android verifies the APK's signature itself).
+    private var legacySend = false   // sendLock
+    private var legacyReceive = false  // `queue` only
 
     let peer: String
     /// True when the tablet reached us through `adb reverse` (USB).
@@ -75,10 +79,23 @@ final class ClientConnection {
         receiving = session
     }
 
+    /// Call on `queue`. Lets the 0.6-era update offer reach an old tablet app.
+    func allowLegacyUpdates() {
+        sendLock.lock()
+        legacySend = true
+        sendLock.unlock()
+        legacyReceive = true
+    }
+
     var isEstablished: Bool {
         sendLock.lock()
         defer { sendLock.unlock() }
         return secure != nil
+    }
+
+    /// Runs work on the connection queue, off the main thread.
+    func queueAsync(_ work: @escaping () -> Void) {
+        queue.async(execute: work)
     }
 
     func send(_ type: MsgType, _ payload: Data = Data()) {
@@ -103,7 +120,7 @@ final class ClientConnection {
             guard let sealed = try? secure.seal(type: type.rawValue, payload: payload) else { return }
             wireType = .encrypted
             body = sealed
-        } else if !type.isHandshake {
+        } else if !type.isHandshake && !(legacySend && (type == .updateOffer || type == .updateApk)) {
             return // nothing but the handshake leaves before encryption is on
         }
         var message = Data(capacity: Proto.headerSize + body.count)
@@ -163,9 +180,11 @@ final class ClientConnection {
                       let innerType = MsgType(rawValue: opened.0)
                 else { return false }
                 onMessage?(innerType, opened.1)
-            } else {
-                guard type.isHandshake else { return false }
+            } else if type.isHandshake || type == .hello || (legacyReceive && type == .updateRequest) {
+                // A clear HELLO is an old tablet app; the session decides what to do with it.
                 onMessage?(type, payload)
+            } else if !legacyReceive {
+                return false
             }
         }
         return true

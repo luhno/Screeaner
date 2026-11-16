@@ -9,7 +9,7 @@ final class PairingPanel {
     func show(model: AppModel) {
         if panel == nil {
             let panel = NSPanel(
-                contentRect: NSRect(x: 0, y: 0, width: 360, height: 220),
+                contentRect: NSRect(x: 0, y: 0, width: 380, height: 240),
                 styleMask: [.titled, .nonactivatingPanel, .utilityWindow],
                 backing: .buffered, defer: false
             )
@@ -17,6 +17,7 @@ final class PairingPanel {
             panel.level = .floating
             panel.isReleasedWhenClosed = false
             panel.hidesOnDeactivate = false
+            panel.appearance = NSAppearance(named: .darkAqua)
             panel.contentView = NSHostingView(rootView: PairingView(model: model))
             panel.center()
             self.panel = panel
@@ -34,39 +35,49 @@ struct PairingView: View {
     @ObservedObject var model: AppModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 18) {
             ForEach(model.pairingRequests) { request in
                 PairingRequestView(request: request) { allowed in
                     model.respond(to: request, allowed: allowed)
                 }
             }
         }
-        .padding(18)
-        .frame(width: 360)
+        .padding(20)
+        .frame(width: 380)
+        .background(Dot.canvas)
+        .foregroundStyle(Dot.ink)
+        .environment(\.colorScheme, .dark)
     }
 }
 
+/// "Tablet X wants to use this Mac", the six-digit code and Allow / Refuse.
 struct PairingRequestView: View {
     let request: PairingRequest
     let decide: (Bool) -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 6) {
+                DotMarker(color: Dot.signal)
+                DotLabel(text: "Pareamento")
+            }
             Text("\(request.name) quer usar este Mac como monitor")
-                .font(.headline)
+                .font(Dot.text(14, .semibold))
                 .fixedSize(horizontal: false, vertical: true)
             Text("Confira se o tablet mostra o mesmo código:")
-                .font(.callout).foregroundStyle(.secondary)
+                .font(Dot.text(12)).foregroundStyle(Dot.inkSecondary)
             Text(PairingRequestView.format(request.code))
-                .font(.system(size: 34, weight: .semibold, design: .monospaced))
+                .font(Dot.display(40))
+                .tracking(2)
                 .textSelection(.enabled)
             Text("Ao permitir, o tablet poderá ver a tela e controlar o mouse e o teclado deste Mac.")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(Dot.text(11.5)).foregroundStyle(Dot.inkSecondary)
                 .fixedSize(horizontal: false, vertical: true)
             HStack {
-                Button("Recusar", role: .cancel) { decide(false) }
+                Button("Recusar") { decide(false) }.buttonStyle(DotButtonStyle())
                 Spacer()
                 Button("Permitir") { decide(true) }
+                    .buttonStyle(DotButtonStyle(primary: true))
                     .keyboardShortcut(.defaultAction)
             }
         }

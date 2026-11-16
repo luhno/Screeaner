@@ -1,12 +1,13 @@
 package app.screeaner
 
-import android.graphics.RectF
+import android.os.Process
 import android.util.Log
 import android.view.Surface
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedInputStream
 import java.io.DataInputStream
+import java.io.File
 import java.io.IOException
 import java.io.OutputStream
 import java.net.DatagramPacket
@@ -17,6 +18,7 @@ import java.net.Socket
 import java.net.SocketTimeoutException
 import java.nio.ByteBuffer
 import java.security.GeneralSecurityException
+import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.LinkedBlockingQueue
@@ -56,7 +58,13 @@ class StreamClient(
     private val discovery: Discovery,
     private val manualHost: () -> String?,
     private val listener: Listener,
+    /** Per-stream settings asked of the Mac (the benchmark uses it); null = the Mac's menu settings. */
+    private val override: StreamOverride? = null,
+    /** Where a downloaded update is stored. */
+    private val updateDir: File? = null,
 ) {
+    @Volatile private var updateOffer: UpdateOffer? = null
+
     enum class State { SEARCHING, CONNECTING, WAITING, PAIRING, STREAMING }
 
     /** All callbacks arrive on background threads. */
@@ -72,8 +80,14 @@ class StreamClient(
         fun onPairingCode(code: String, macName: String, reply: ((Boolean) -> Unit)?)
         fun onDenied(reason: String)
         fun onClipboard(text: String)
-        fun onProbeInfo(area: RectF)
+        /** The Mac carries a newer tablet app; call [requestUpdate] to get it. */
+        fun onUpdateOffer(offer: UpdateOffer) {}
+        /** The APK arrived and matched the offer's size and SHA-256. */
+        fun onUpdateDownloaded(apk: File, offer: UpdateOffer) {}
     }
+
+    /** What the Mac offered: its bundled tablet app. */
+    data class UpdateOffer(val versionName: String, val versionCode: Int, val size: Int, val sha256: String)
 
     /** What the Mac said it is sending; null until a stream starts. */
     @Volatile var streamInfo: StreamInfo? = null
@@ -96,9 +110,14 @@ class StreamClient(
     @Volatile private var rttNanos = 0L
     @Volatile private var lastKeyframeRequest = 0L
     @Volatile private var clockOffsetMicros = Long.MIN_VALUE
+    @Volatile private var latencyTest: LatencyTest? = null
     private var bestRttNanos = Long.MAX_VALUE // reader thread only
     private val keyframeRequests = AtomicInteger()
     private val bytesReceived = AtomicLong()
+    private val transferLock = Any()
+    private var transferNanosSum = 0L // guarded by transferLock
+    private var transferNanosMax = 0L
+    private var transferCount = 0
     /** Plain messages ([type][len][payload]) the writer thread seals and sends. */
     private val outbox = LinkedBlockingQueue<ByteArray>()
     private val badUntil = ConcurrentHashMap<Discovery.Endpoint, Long>()
@@ -162,18 +181,63 @@ class StreamClient(
         queue(Protocol.CLIPBOARD, bytes)
     }
 
-    /** End-to-end latency probe; 0 asks the Mac to show the marker. */
-    fun sendProbe(id: Int) {
-        if (!isStreaming) return
-        queue(Protocol.PROBE, ByteBuffer.allocate(4).putInt(id).array())
-    }
-
     /** The tablet rotated: the Mac resizes the display in place. */
     fun resize(newWidth: Int, newHeight: Int) {
         width = newWidth
         height = newHeight
         if (secure == null) return // the next hello carries the new size
         queue(Protocol.RESIZE, JSONObject().put("width", newWidth).put("height", newHeight).toString().toByteArray())
+    }
+
+    // endregion
+
+    // region Touch-to-screen latency test, benchmark and updates
+
+    /** Starts a [LatencyTest] on the running stream; false if not streaming or one is already running. */
+    fun startLatencyTest(listener: LatencyTest.Listener, samples: Int = LatencyTest.SAMPLES): Boolean {
+        val info = streamInfo ?: return false
+        val current = decoder ?: return false
+        if (!isStreaming || latencyTest != null) return false
+        val test = LatencyTest(
+            surface = surface,
+            frameWidth = info.width,
+            frameHeight = info.height,
+            send = ::sendProbe,
+            clockOffsetMicros = { clockOffsetMicros },
+            listener = object : LatencyTest.Listener {
+                override fun onProgress(done: Int, total: Int, lastMs: Double) =
+                    listener.onProgress(done, total, lastMs)
+
+                override fun onFinished(result: LatencyTest.Result) {
+                    current.onRendered = null
+                    latencyTest = null
+                    listener.onFinished(result)
+                }
+            },
+            samples = samples,
+        )
+        latencyTest = test
+        current.onRendered = test::onFrameRendered
+        test.start()
+        return true
+    }
+
+    fun cancelLatencyTest() {
+        latencyTest?.cancel()
+    }
+
+    /** Asks the Mac for the update it offered. */
+    fun requestUpdate() {
+        if (updateOffer != null) queue(Protocol.UPDATE_REQUEST, ByteArray(0))
+    }
+
+    /** Benchmark: covers the Mac display with a moving pattern, or removes it. */
+    fun setTestMotion(on: Boolean) {
+        if (isStreaming) sendProbe(if (on) Protocol.PROBE_MOTION_ON else Protocol.PROBE_MOTION_OFF, 0)
+    }
+
+    private fun sendProbe(state: Int, seq: Int) {
+        queue(Protocol.PROBE, ByteBuffer.allocate(5).put(state.toByte()).putInt(seq).array())
     }
 
     // endregion
@@ -195,6 +259,8 @@ class StreamClient(
     }
 
     private fun run() {
+        // This thread reads the TCP stream and feeds the decoder (all video over USB).
+        Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_DISPLAY)
         while (running) {
             listener.onState(State.SEARCHING, "")
             var connected: Socket? = null
@@ -204,6 +270,8 @@ class StreamClient(
                 val attempt = Socket()
                 try {
                     attempt.tcpNoDelay = true
+                    // DSCP EF: Wi-Fi (WMM) sends touches in the voice queue, ahead of bulk traffic.
+                    attempt.trafficClass = Protocol.DSCP_EF
                     attempt.connect(InetSocketAddress(candidate.host, candidate.port), 600)
                     connected = attempt
                     endpoint = candidate
@@ -226,6 +294,7 @@ class StreamClient(
                 if (running) Log.w(TAG, "Session ended", e)
             } finally {
                 isStreaming = false
+                latencyTest?.cancel()
                 secure = null
                 closeQuietly(connected)
                 socket = null
@@ -286,7 +355,14 @@ class StreamClient(
             options.deviceId, options.deviceName,
         )
         output.write(message(Protocol.SEC_HELLO, hello))
-        val serverPayload = expect(input, Protocol.SEC_SERVER)
+        // A Mac app from before pairing (0.6 or older) never answers this.
+        socket.soTimeout = 6_000
+        val serverPayload = try {
+            expect(input, Protocol.SEC_SERVER)
+        } catch (e: SocketTimeoutException) {
+            throw Denied("o app do Mac não respondeu ao pareamento; atualize o Screeaner no Mac para a versão ${options.appVersion.substringBefore(' ')}")
+        }
+        socket.soTimeout = 150_000
         val server = SecureChannel.Server(serverPayload)
         val reveal = SecureChannel.buildReveal(ephemeralPublic, nonce)
         output.write(message(Protocol.SEC_REVEAL, reveal))
@@ -353,6 +429,7 @@ class StreamClient(
             while (running) {
                 val wireType = input.read()
                 if (wireType < 0) break
+                val firstByteNanos = System.nanoTime()
                 val length = input.readInt()
                 if (length < 0 || length > Protocol.MAX_PAYLOAD) throw IOException("Bad length $length")
                 if (length > buffer.size) buffer = ByteArray(maxOf(length, buffer.size * 2))
@@ -374,6 +451,8 @@ class StreamClient(
                             macName = json.optString("server", "Mac"),
                             macVersion = json.optString("version", "?"),
                             mode = json.optString("mode", "extend"),
+                            lowLatencyEncoder = if (json.has("lowLatency")) json.getBoolean("lowLatency") else null,
+                            frameCap = if (json.has("frameCap")) json.getBoolean("frameCap") else null,
                         )
                         streamInfo = info
                         // A second CONFIG means the size changed (rotation): new decoder, same connection.
@@ -404,7 +483,7 @@ class StreamClient(
                         if (!videoOverUdp) {
                             deliver(
                                 plain, 1 + Protocol.VIDEO_HEADER, size - Protocol.VIDEO_HEADER,
-                                pts, isKey, encodeMicros, length,
+                                pts, isKey, encodeMicros, length, System.nanoTime() - firstByteNanos,
                             )
                         }
                     }
@@ -413,13 +492,27 @@ class StreamClient(
 
                     Protocol.CLIPBOARD -> listener.onClipboard(String(plain, 1, size, Charsets.UTF_8))
 
-                    Protocol.PROBE_INFO -> if (size >= 16) {
-                        val area = ByteBuffer.wrap(plain, 1, 16)
-                        val x = area.float
-                        val y = area.float
-                        val w = area.float
-                        val h = area.float
-                        listener.onProbeInfo(RectF(x, y, x + w, y + h))
+                    Protocol.UPDATE_OFFER -> {
+                        val json = JSONObject(String(plain, 1, size, Charsets.UTF_8))
+                        val offer = UpdateOffer(
+                            versionName = json.optString("versionName", "?"),
+                            versionCode = json.optInt("versionCode", 0),
+                            size = json.optInt("size", 0),
+                            sha256 = json.optString("sha256", ""),
+                        )
+                        if (offer.versionCode > currentVersionCode() && offer.size > 0) {
+                            updateOffer = offer
+                            listener.onUpdateOffer(offer)
+                        }
+                    }
+
+                    Protocol.UPDATE_APK -> updateOffer?.let { offer ->
+                        saveUpdate(plain, 1, size, offer)?.let { listener.onUpdateDownloaded(it, offer) }
+                    }
+
+                    Protocol.PROBE_ACK -> if (size >= 12) {
+                        val ack = ByteBuffer.wrap(plain, 1, size)
+                        latencyTest?.onAck(ack.int, ack.long)
                     }
 
                     Protocol.PONG -> if (size >= 8) {
@@ -444,11 +537,40 @@ class StreamClient(
         return if (gotConfig) Outcome.STREAMED else Outcome.FAILED
     }
 
+    /** Our own version code, from "0.7.0 (7)". */
+    private fun currentVersionCode(): Int =
+        options.appVersion.substringAfterLast('(', "").substringBefore(')').trim().toIntOrNull() ?: 0
+
+    /** Writes the APK to [updateDir] if it matches the offer; null otherwise. */
+    private fun saveUpdate(data: ByteArray, offset: Int, length: Int, offer: UpdateOffer): File? {
+        val dir = updateDir ?: return null
+        if (length != offer.size) return null
+        val bytes = data.copyOfRange(offset, offset + length)
+        val hex = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
+        if (!hex.equals(offer.sha256, ignoreCase = true)) {
+            Log.w(TAG, "Update rejected: checksum mismatch")
+            return null
+        }
+        return try {
+            dir.mkdirs()
+            File(dir, "screeaner-${offer.versionCode}.apk").apply { writeBytes(bytes) }
+        } catch (e: IOException) {
+            Log.w(TAG, "Could not save update", e)
+            null
+        }
+    }
+
     private fun deliver(
         data: ByteArray, offset: Int, length: Int, pts: Long, isKey: Boolean, encodeMicros: Int, wireBytes: Int,
+        transferNanos: Long,
     ) {
         lastEncodeMicros = encodeMicros
         bytesReceived.addAndGet(wireBytes.toLong())
+        synchronized(transferLock) {
+            transferNanosSum += transferNanos
+            if (transferNanos > transferNanosMax) transferNanosMax = transferNanos
+            transferCount++
+        }
         val accepted = decoder?.feed(data, offset, length, pts, isKey) ?: return
         if (!accepted) requestKeyframe()
     }
@@ -480,6 +602,7 @@ class StreamClient(
     private fun startUdp(address: InetAddress, port: Int, token: Int): Thread? {
         val udp = try {
             DatagramSocket().apply {
+                trafficClass = Protocol.DSCP_EF
                 receiveBufferSize = 2 * 1024 * 1024
                 soTimeout = 20
             }
@@ -489,7 +612,7 @@ class StreamClient(
         }
         udpSocket = udp
         val frames = FecAssembler(object : FecAssembler.Sink {
-            override fun onFrame(frameId: Int, blob: ByteArray, length: Int, key: Boolean) {
+            override fun onFrame(frameId: Int, blob: ByteArray, length: Int, key: Boolean, transferNanos: Long) {
                 val keys = secure ?: return
                 val plain = try {
                     keys.openVideo(frameId.toLong() and 0xFFFFFFFFL, blob, length)
@@ -502,7 +625,7 @@ class StreamClient(
                 val pts = header.long
                 val encodeMicros = header.int
                 videoOverUdp = true
-                deliver(plain, UDP_BLOB_HEADER, plain.size - UDP_BLOB_HEADER, pts, key, encodeMicros, length)
+                deliver(plain, UDP_BLOB_HEADER, plain.size - UDP_BLOB_HEADER, pts, key, encodeMicros, length, transferNanos)
             }
 
             override fun onLoss() = requestKeyframe()
@@ -549,6 +672,8 @@ class StreamClient(
 
     /** The only thread that seals and writes, so message counters follow the wire order. */
     private fun writeLoop(socket: Socket, output: OutputStream, session: SecureChannel.Session) {
+        // Input leaves from here: never let it wait behind background work.
+        Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_DISPLAY)
         fun send(plain: ByteArray) {
             val sealed = session.seal(plain[0].toInt() and 0xFF, plain, 5, plain.size - 5)
             output.write(message(Protocol.ENCRYPTED, sealed))
@@ -581,6 +706,15 @@ class StreamClient(
         val bytes = bytesReceived.getAndSet(0)
         val link = assembler?.takeStats() ?: intArrayOf(0, 0, 0)
         val rttMicros = (rttNanos / 1000).coerceIn(0, Int.MAX_VALUE.toLong()).toInt()
+        val transferAvgMs: Double
+        val transferMaxMs: Double
+        synchronized(transferLock) {
+            transferAvgMs = if (transferCount > 0) transferNanosSum / transferCount / 1e6 else 0.0
+            transferMaxMs = transferNanosMax / 1e6
+            transferNanosSum = 0
+            transferNanosMax = 0
+            transferCount = 0
+        }
 
         val stats = ByteBuffer.allocate(16)
             .putInt(rttMicros)
@@ -598,6 +732,8 @@ class StreamClient(
                 latencyMaxMs = decoded.latencyMaxMs,
                 encodeMs = lastEncodeMicros / 1000.0,
                 networkMs = rttNanos / 2e6,
+                transferAvgMs = transferAvgMs,
+                transferMaxMs = transferMaxMs,
                 decodeAvgMs = decoded.decodeAvgMs,
                 decodeMaxMs = decoded.decodeMaxMs,
                 packetLossPct = if (link[0] > 0) link[1] * 100.0 / link[0] else 0.0,
@@ -621,6 +757,11 @@ class StreamClient(
         .put("position", options.displayPosition)
         .put("clipboard", options.clipboard)
         .put("audio", options.audio)
+        .apply {
+            override?.let {
+                put("streamOverride", JSONObject().put("codec", it.codec).put("fps", it.fps).put("frameCap", it.frameCap))
+            }
+        }
         .toString()
 
     private fun pause(millis: Long) {

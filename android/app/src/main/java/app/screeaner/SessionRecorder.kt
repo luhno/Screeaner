@@ -36,7 +36,9 @@ class SessionRecorder(private val context: Context) {
     private var framesLost = 0
     private var keyframes = 0
     private var cpuSum = 0.0
+    private var transferSum = 0.0
     private var maxTemp = 0.0
+    private val notes = ArrayList<String>()
 
     val isRecording: Boolean get() = writer != null
     val elapsedSeconds: Int get() = ((SystemClock.elapsedRealtime() - startedAt) / 1000).toInt()
@@ -70,7 +72,9 @@ class SessionRecorder(private val context: Context) {
             framesLost = 0
             keyframes = 0
             cpuSum = 0.0
+            transferSum = 0.0
             maxTemp = 0.0
+            notes.clear()
             true
         } catch (e: Exception) {
             Log.w(TAG, "Could not start recording", e)
@@ -86,7 +90,8 @@ class SessionRecorder(private val context: Context) {
                 listOf(
                     num(seconds, 1), stream.transport, stream.fps.toString(), num(stream.mbps, 2),
                     num(stream.latencyAvgMs, 2), num(stream.latencyMaxMs, 2), num(stream.encodeMs, 2),
-                    num(stream.networkMs, 2), num(stream.decodeAvgMs, 2), num(stream.decodeMaxMs, 2),
+                    num(stream.networkMs, 2), num(stream.transferAvgMs, 2), num(stream.transferMaxMs, 2),
+                    num(stream.decodeAvgMs, 2), num(stream.decodeMaxMs, 2),
                     num(stream.packetLossPct, 2), stream.framesLost.toString(), stream.keyframeRequests.toString(),
                     num(device.cpuPct, 1), num(device.memoryMb, 1), device.batteryPct.toString(),
                     num(device.batteryTempC, 1), device.thermal,
@@ -103,18 +108,21 @@ class SessionRecorder(private val context: Context) {
             framesLost += stream.framesLost
             keyframes += stream.keyframeRequests
             cpuSum += device.cpuPct
+            transferSum += stream.transferAvgMs
             if (device.batteryTempC > maxTemp) maxTemp = device.batteryTempC
         } catch (e: Exception) {
             Log.w(TAG, "Recording failed", e)
         }
     }
 
-    /** Adds a comment line, e.g. the result of an end-to-end latency test. */
-    fun note(text: String) {
+    /** Writes [lines] (e.g. a latency test result) as comments, and repeats them in the summary. */
+    fun note(lines: List<String>) {
         val out = writer ?: return
+        val seconds = num((SystemClock.elapsedRealtime() - startedAt) / 1000.0, 1)
         try {
-            out.write("# $text\n")
+            lines.forEach { out.write("# [$seconds s] $it\n") }
             out.flush()
+            notes += lines
         } catch (e: Exception) {
             Log.w(TAG, "Recording failed", e)
         }
@@ -134,10 +142,11 @@ class SessionRecorder(private val context: Context) {
             "amostras: $rows s",
             "latência Mac→tela: média ${num(sorted.average(), 1)} ms · p50 ${num(percentile(0.5), 1)} ms" +
                 " · p95 ${num(percentile(0.95), 1)} ms · máx ${num(sorted.lastOrNull() ?: Double.NaN, 1)} ms",
+            "transferência média por quadro: ${num(transferSum / n, 2)} ms",
             "fps médio: ${num(fpsSum.toDouble() / n, 1)} · bitrate médio: ${num(mbpsSum / n, 1)} Mbps",
             "perda média: ${num(lossSum / n, 2)} % · quadros perdidos: $framesLost · keyframes pedidos: $keyframes",
             "CPU média do app: ${num(cpuSum / n, 0)} % de um núcleo · temp. máx. bateria: ${num(maxTemp, 1)} °C",
-        )
+        ) + notes
         try {
             out.write("# --- resumo ---\n")
             lines.forEach { out.write("# $it\n") }
@@ -146,6 +155,27 @@ class SessionRecorder(private val context: Context) {
             Log.w(TAG, "Could not finish recording", e)
         }
         return Summary(target, rows, lines.joinToString("\n"), publish(target))
+    }
+
+    /**
+     * Saves a benchmark report next to the sessions (so Share picks it up as the
+     * latest file) and publishes it to Downloads. Returns where it went, or null.
+     */
+    fun saveReport(setup: List<String>, csv: List<String>, summary: List<String>): String? = try {
+        val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
+        val target = File(directory(), "screeaner-benchmark-$stamp.csv")
+        BufferedWriter(FileWriter(target)).use { out ->
+            out.write("# Screeaner benchmark\n")
+            out.write("# started: ${SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date())}\n")
+            setup.forEach { out.write("# $it\n") }
+            csv.forEach { out.write(it + "\n") }
+            out.write("# --- resumo ---\n")
+            summary.forEach { out.write("# $it\n") }
+        }
+        publish(target) ?: target.absolutePath
+    } catch (e: Exception) {
+        Log.w(TAG, "Could not save benchmark", e)
+        null
     }
 
     /** Copies the file to the shared Downloads folder so it is easy to find. Android 10+ only. */
@@ -173,6 +203,7 @@ class SessionRecorder(private val context: Context) {
     private companion object {
         const val TAG = "ScreeanerRecorder"
         const val HEADER = "t_s,transport,fps,mbps,latency_avg_ms,latency_max_ms,encode_ms,network_ms," +
+            "transfer_avg_ms,transfer_max_ms," +
             "decode_avg_ms,decode_max_ms,packet_loss_pct,frames_lost,keyframe_requests," +
             "cpu_pct,memory_mb,battery_pct,battery_temp_c,thermal"
     }

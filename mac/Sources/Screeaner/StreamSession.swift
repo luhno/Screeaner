@@ -37,7 +37,8 @@ struct PairingRequest: Identifiable {
 
 /// Everything for one tablet: the pairing handshake, then
 /// virtual display -> ScreenCaptureKit -> VideoToolbox -> TCP or UDP+FEC (encrypted),
-/// plus input, clipboard, audio and latency probes. Several sessions can run side by side.
+/// plus input, clipboard, audio, latency probes and tablet app updates.
+/// Several sessions can run side by side.
 final class StreamSession {
     struct Stats {
         var fps = 0
@@ -54,6 +55,8 @@ final class StreamSession {
         case waitingReveal(hello: SecureChannel.Hello, helloPayload: Data, serverPayload: Data,
                            ephemeral: P256.KeyAgreement.PrivateKey, known: Bool)
         case waitingConfirm(session: SecureChannel.Session, hello: SecureChannel.Hello, needsApproval: Bool)
+        /// An app from before the secure protocol: it can only be updated.
+        case legacy
         case done
     }
 
@@ -63,6 +66,10 @@ final class StreamSession {
     // Main queue
     private(set) var clientName = "Tablet"
     private(set) var deviceID: String?
+    /// Whether VideoToolbox accepted low-latency rate control; nil before the stream starts.
+    private(set) var lowLatencyEncoder: Bool?
+    /// The tablet app's version string, e.g. "0.7.0 (7)".
+    private(set) var clientVersion: String?
     private(set) var summary = ""
     /// Set when the session ended because of an error worth showing.
     private(set) var failure: String?
@@ -92,9 +99,11 @@ final class StreamSession {
     private var hiDPI = true
     private var useUdp = false
     private var wantsAudio = false
+    private var frameCap = true
+    private var streamOverride: Hello.StreamOverride?
     private var mirrored: [CGDirectDisplayID] = []
     private var dimmed: [CGDirectDisplayID: Float] = [:]
-    private let marker = ProbeMarker()
+    private var probe: LatencyProbe?
 
     // captureQueue only
     private var encoder: VideoEncoder?
@@ -131,6 +140,7 @@ final class StreamSession {
     var onPairingFinished: ((UUID) -> Void)?
     var onPaired: (() -> Void)?
     var onClipboard: ((String) -> Void)?
+    var onLegacyClient: (() -> Void)?
 
     init(connection: ClientConnection) {
         self.connection = connection
@@ -188,6 +198,24 @@ final class StreamSession {
             let session = SecureChannel.Session(ee: ee, ss: ss, transcript: transcript, tabletSide: false)
             handshake = .waitingConfirm(session: session, hello: hello, needsApproval: !known)
             if !known { askUser(name: hello.name, code: session.sas) }
+
+        case (.hello, .waitingHello):
+            // 0.6 or older: plain HELLO, no pairing. Offer it the update instead.
+            guard let hello = try? JSONDecoder().decode(Hello.self, from: payload) else { return abortHandshake() }
+            handshake = .legacy
+            connection.allowLegacyUpdates()
+            DispatchQueue.main.async {
+                self.clientName = hello.name
+                self.clientVersion = hello.version
+                self.summary = "App antigo (v\(hello.version ?? "?")): só pode ser atualizado"
+                self.onLegacyClient?()
+            }
+
+        case (.updateRequest, .legacy):
+            sendUpdate()
+
+        case (_, .legacy):
+            break // anything else an old app sends is ignored
 
         case let (.secConfirm, .waitingConfirm(session, _, _)):
             guard Self.constantTimeEqual(payload, session.tabletConfirmation()) else { return abortHandshake() }
@@ -309,8 +337,7 @@ final class StreamSession {
             // Echo plus our clock (the one frame timestamps use), so the tablet
             // can line the two clocks up and measure real per-frame latency.
             var reply = payload
-            let now = CMTimeGetSeconds(CMClockGetTime(CMClockGetHostTimeClock()))
-            reply.appendBE(UInt64(max(0, now) * 1_000_000))
+            reply.appendBE(Proto.hostClockMicros())
             connection.send(.pong, reply)
         case .stats:
             guard payload.count >= 16 else { return }
@@ -330,9 +357,12 @@ final class StreamSession {
             guard enabled, let text = String(data: payload, encoding: .utf8) else { return }
             DispatchQueue.main.async { self.onClipboard?(text) }
         case .probe:
-            guard payload.count >= 4 else { return }
-            let id = payload.readBE(UInt32.self, at: 0)
-            DispatchQueue.main.async { self.probe(id) }
+            guard payload.count >= 5 else { return }
+            let state = LatencyProbe.State(rawValue: payload[first]) ?? .hidden
+            let seq = payload.readBE(UInt32.self, at: 1)
+            DispatchQueue.main.async { self.runProbe(state, seq: seq) }
+        case .updateRequest:
+            sendUpdate()
         default:
             break
         }
@@ -361,24 +391,36 @@ final class StreamSession {
         connection.send(.clipboard, data)
     }
 
-    /// End-to-end latency test: probe 0 shows the marker, then each probe flips it.
-    private func probe(_ id: UInt32) {
-        guard began, !isStopped else { return }
-        if id == 0 {
-            guard let rect = marker.show(on: captureID) else { return }
-            let area = touchArea
-            let mapped = CGRect(
-                x: area.minX + rect.minX * area.width, y: area.minY + rect.minY * area.height,
-                width: rect.width * area.width, height: rect.height * area.height
+    /// Main queue: paints the latency test square and tells the tablet when it did.
+    private func runProbe(_ state: LatencyProbe.State, seq: UInt32) {
+        guard began, captureID != 0, !isStopped else { return }
+        if probe == nil, state != .hidden { probe = LatencyProbe(displayID: captureID) }
+        let paintedAt = probe?.apply(state) ?? Proto.hostClockMicros()
+        if state == .hidden { probe = nil }
+        var reply = Data(capacity: 12)
+        reply.appendBE(seq)
+        reply.appendBE(paintedAt)
+        connection.send(.probeAck, reply)
+    }
+
+    // MARK: - Tablet app update
+
+    /// Tells the tablet a newer app is available; it answers with `updateRequest` if the user agrees.
+    func offerUpdate(_ apk: TabletApk) {
+        connection.queueAsync {
+            guard let loaded = apk.load(), loaded.data.count <= Proto.maxPayload else { return }
+            let offer = UpdateOffer(
+                versionName: apk.versionName, versionCode: apk.versionCode,
+                size: loaded.data.count, sha256: loaded.sha256
             )
-            var payload = Data()
-            for value in [mapped.minX, mapped.minY, mapped.width, mapped.height] {
-                payload.appendBE(Float(value).bitPattern)
-            }
-            connection.send(.probeInfo, payload)
-        } else {
-            marker.set(lit: id % 2 == 1)
+            if let json = try? JSONEncoder().encode(offer) { self.connection.send(.updateOffer, json) }
         }
+    }
+
+    /// Connection queue: the tablet accepted; send the APK in one (encrypted) message.
+    private func sendUpdate() {
+        guard let apk = TabletApk.bundled, let loaded = apk.load(), loaded.data.count <= Proto.maxPayload else { return }
+        connection.send(.updateApk, loaded.data)
     }
 
     // MARK: - UDP path
@@ -426,8 +468,10 @@ final class StreamSession {
     }
 
     private func makeEncoder(width: Int, height: Int, bitrate: Int) -> VideoEncoder? {
-        guard let encoder = try? VideoEncoder(width: width, height: height, codec: codec, fps: fps, bitrate: bitrate)
-        else { return nil }
+        guard let encoder = try? VideoEncoder(
+            width: width, height: height, codec: codec, fps: fps, bitrate: bitrate, capFrameSize: frameCap
+        ) else { return nil }
+        lowLatencyEncoder = encoder.isLowLatency
         encoder.onEncoded = { [weak self] data, isKey, pts, encodeMicros in
             self?.transmit(data, isKey: isKey, ptsMicros: pts, encodeMicros: encodeMicros)
         }
@@ -438,7 +482,8 @@ final class StreamSession {
         let config = StreamConfig(
             codec: codec.rawValue, width: streamWidth, height: streamHeight, fps: fps,
             token: useUdp ? token : 0, udpPort: Int(Proto.port), mode: mode.rawValue,
-            server: Host.current().localizedName ?? "Mac", version: Proto.appVersion, audio: wantsAudio
+            server: Host.current().localizedName ?? "Mac", version: Proto.appVersion, audio: wantsAudio,
+            lowLatency: lowLatencyEncoder ?? false, frameCap: frameCap
         )
         return try? JSONEncoder().encode(config)
     }
@@ -446,7 +491,7 @@ final class StreamSession {
     private func updateSummary(_ hello: Hello? = nil) {
         let orientation = streamWidth >= streamHeight ? "" : " · retrato"
         let tabletApp = hello?.version.map { " · app \($0)" } ?? ""
-        let extras = (wantsAudio ? " · áudio" : "")
+        let extras = (wantsAudio ? " · áudio" : "") + (streamOverride != nil ? " · benchmark" : "")
         summary = "\(streamWidth)×\(streamHeight) · \(fps) Hz · \(codec == .hevc ? "HEVC" : "H.264")"
             + "\(orientation)\(tabletApp)\(extras)\n\(mode.label(position))"
     }
@@ -458,8 +503,12 @@ final class StreamSession {
         hiDPI = defaults.bool(forKey: SettingsKey.hiDPI)
         // Portrait tablets simply report width < height.
         (streamWidth, streamHeight) = clampSize(hello.width, hello.height)
-        fps = max(24, min(defaults.integer(forKey: SettingsKey.fps), Int(hello.refreshRate.rounded())))
-        let wantsHEVC = defaults.string(forKey: SettingsKey.codec) == Codec.hevc.rawValue
+        // The benchmark asks for specific settings for one stream; the menu keeps its own.
+        streamOverride = hello.streamOverride
+        let requestedFps = streamOverride?.fps ?? defaults.integer(forKey: SettingsKey.fps)
+        fps = max(24, min(requestedFps, Int(hello.refreshRate.rounded())))
+        let wantsHEVC = (streamOverride?.codec ?? defaults.string(forKey: SettingsKey.codec)) == Codec.hevc.rawValue
+        frameCap = streamOverride?.frameCap ?? true
         codec = (wantsHEVC && hello.codecs.contains(Codec.hevc.rawValue)) ? .hevc : .h264
         let bitrate = max(2, defaults.integer(forKey: SettingsKey.bitrateMbps)) * 1_000_000
         useUdp = (hello.udp ?? false) && defaults.bool(forKey: SettingsKey.udpOverWifi) && !connection.isLoopback
@@ -467,6 +516,7 @@ final class StreamSession {
         adaptive = defaults.bool(forKey: SettingsKey.adaptiveBitrate)
         controller = BitrateController(maximum: bitrate)
         clientName = hello.name
+        clientVersion = hello.version
         lock.lock()
         clipboardEnabled = (hello.clipboard ?? false) && defaults.bool(forKey: SettingsKey.clipboard)
         lock.unlock()
@@ -701,7 +751,8 @@ final class StreamSession {
                 self.pendingRequest = nil
                 self.onPairingFinished?(request)
             }
-            self.marker.hide()
+            _ = self.probe?.apply(.hidden)
+            self.probe = nil
             self.capturer?.stop()
             self.capturer = nil
             self.captureQueue.async {

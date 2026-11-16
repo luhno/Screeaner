@@ -21,16 +21,23 @@ final class VideoEncoder {
     private let codec: Codec
     let width: Int
     let height: Int
+    private let fps: Int
+    private let capFrameSize: Bool
     private var forceKey = true
+    /// True when VideoToolbox accepted low-latency rate control. Without it the
+    /// encoder pipelines frames internally, which costs about one frame of latency.
+    private(set) var isLowLatency = false
     private static let startCode: [UInt8] = [0, 0, 0, 1]
 
     /// (Annex-B access unit, isKeyframe, ptsMicros, encodeMicros). Called on a VideoToolbox thread.
     var onEncoded: ((Data, Bool, UInt64, UInt32) -> Void)?
 
-    init(width: Int, height: Int, codec: Codec, fps: Int, bitrate: Int) throws {
+    init(width: Int, height: Int, codec: Codec, fps: Int, bitrate: Int, capFrameSize: Bool = true) throws {
         self.codec = codec
         self.width = width
         self.height = height
+        self.fps = max(fps, 1)
+        self.capFrameSize = capFrameSize
         let codecType = codec == .hevc ? kCMVideoCodecType_HEVC : kCMVideoCodecType_H264
 
         let lowLatencySpec: [CFString: Any] = [
@@ -56,7 +63,10 @@ final class VideoEncoder {
                 refcon: nil,
                 compressionSessionOut: &created
             )
-            if status == noErr, created != nil { break }
+            if status == noErr, created != nil {
+                isLowLatency = spec[kVTVideoEncoderSpecification_EnableLowLatencyRateControl] != nil
+                break
+            }
         }
         guard status == noErr, let session = created else { throw EncoderError.createFailed(status) }
         self.session = session
@@ -69,20 +79,37 @@ final class VideoEncoder {
         set(kVTCompressionPropertyKey_AllowFrameReordering, false)
         set(kVTCompressionPropertyKey_ProfileLevel,
             codec == .hevc ? kVTProfileLevel_HEVC_Main_AutoLevel : kVTProfileLevel_H264_High_AutoLevel)
-        set(kVTCompressionPropertyKey_AverageBitRate, bitrate)
         set(kVTCompressionPropertyKey_ExpectedFrameRate, fps)
         // Keyframes are huge latency spikes: only send them when asked.
         set(kVTCompressionPropertyKey_MaxKeyFrameInterval, 100_000)
         set(kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration, 0)
         set(kVTCompressionPropertyKey_MaxFrameDelayCount, 0)
         set(kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality, true)
+        setBitrate(bitrate)
         VTCompressionSessionPrepareToEncodeFrames(session)
     }
 
-    /// Changes the target bitrate on the fly (adaptive bitrate).
+    /// A single frame may be at most this many times the average frame size.
+    /// A big frame costs latency twice: it takes longer to encode and, worse,
+    /// longer to cross the link (500 KB is ~40 ms on a 100 Mbps Wi-Fi). Capping
+    /// it softens keyframes and scene changes; the still-screen refinement
+    /// pass in StreamSession restores the sharpness right after.
+    static let maxFrameMultiple = 4
+
+    /// Changes the target bitrate on the fly (adaptive bitrate) and the
+    /// per-frame cap that follows it.
     func setBitrate(_ bitrate: Int) {
         guard let session else { return }
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_AverageBitRate, value: bitrate as CFNumber)
+        guard capFrameSize else { return }
+
+        let bytesPerSecond = Double(bitrate) / 8
+        let frameSeconds = 1 / Double(fps)
+        let maxFrameBytes = bytesPerSecond * frameSeconds * Double(Self.maxFrameMultiple)
+        // Pairs of (bytes, seconds): per-frame cap, plus 1.5x the average over one second.
+        let limits = [maxFrameBytes, frameSeconds, bytesPerSecond * 1.5, 1.0] as CFArray
+        // Not every encoder accepts limits in low-latency mode; then it is ignored.
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_DataRateLimits, value: limits)
     }
 
     func forceKeyframe() {

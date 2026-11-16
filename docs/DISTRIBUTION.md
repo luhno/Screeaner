@@ -38,28 +38,26 @@ O ícone (`mac/Resources/icon.svg`) já está renderizado em `mac/Resources/AppI
 1. Atualize a versão nos dois apps (`mac/Resources/Info.plist`: `CFBundleShortVersionString`/`CFBundleVersion`; `android/app/build.gradle.kts`: `versionName`/`versionCode`) e o changelog em `android/fastlane/metadata/android/*/changelogs/<versionCode>.txt`.
 2. Crie e envie a tag:
    ```bash
-   git tag v0.4.0
-   git push origin v0.4.0
+   git tag v0.7.0
+   git push origin v0.7.0
    ```
 3. O workflow **Release** (`.github/workflows/release.yml`) gera:
-   - `Screeaner-mac.zip` — o `.app` (assinado com Developer ID e notarizado, se os secrets existirem; senão ad-hoc);
-   - `Screeaner-android.apk` — APK de release (assinado com a chave de release, ou com a chave de debug se não houver keystore);
+   - `Screeaner.apk` — o app do tablet, sempre assinado com a chave de release (o workflow falha sem ela, para nunca publicar um APK que não instala por cima);
+   - `Screeaner-mac.zip` — o `.app`, com esse APK dentro (o Mac atualiza os tablets), assinado com o certificado de `MAC_CERT_*` e notarizado se houver os secrets da Apple; senão ad-hoc;
    - `Screeaner-android.aab` — Android App Bundle para a Play Store;
 
-   e anexa os três a uma GitHub Release com o nome da tag.
-
-O workflow também pode ser disparado manualmente (*Actions › Release › Run workflow*); nesse caso os arquivos ficam só como artefatos do run, sem criar release.
+   e anexa os três a uma GitHub Release com o nome da tag. O workflow confere que a tag bate com o `versionName`.
 
 ## Secrets do GitHub
 
-Configure em *Settings › Secrets and variables › Actions*. Sem eles o workflow continua funcionando, só sem assinatura de distribuição.
+Configure em *Settings › Secrets and variables › Actions*.
 
-**macOS (assinatura Developer ID + notarização)** — todos os cinco são necessários:
+**macOS** — `MAC_CERT_*` mantém as permissões entre versões (um certificado autoassinado basta). Para notarizar, o certificado precisa ser *Developer ID Application* e os três secrets da Apple também precisam existir:
 
 | Secret | Conteúdo |
 |---|---|
-| `MACOS_CERT_P12_BASE64` | Certificado *Developer ID Application* + chave privada exportados como `.p12`, em base64 (`base64 -i cert.p12 \| pbcopy`) |
-| `MACOS_CERT_PASSWORD` | Senha do `.p12` |
+| `MAC_CERT_P12_BASE64` | Certificado *Developer ID Application* + chave privada exportados como `.p12`, em base64 (`base64 -i cert.p12 \| pbcopy`) |
+| `MAC_CERT_PASSWORD` | Senha do `.p12` |
 | `APPLE_ID` | Apple ID da conta de desenvolvedor |
 | `APPLE_TEAM_ID` | Team ID (10 caracteres) |
 | `APPLE_APP_PASSWORD` | Senha específica de app gerada em account.apple.com |
@@ -68,10 +66,10 @@ Configure em *Settings › Secrets and variables › Actions*. Sem eles o workfl
 
 | Secret | Conteúdo |
 |---|---|
-| `ANDROID_KEYSTORE_BASE64` | Keystore (`.jks`) em base64 |
-| `SCREEANER_KEYSTORE_PASSWORD` | Senha do keystore |
-| `SCREEANER_KEY_ALIAS` | Alias da chave |
-| `SCREEANER_KEY_PASSWORD` | Senha da chave |
+| `ANDROID_KEYSTORE_BASE64` | Keystore (`.jks`) em base64 — obrigatório para publicar |
+| `ANDROID_KEYSTORE_PASSWORD` | Senha do keystore — obrigatório |
+| `ANDROID_KEY_ALIAS` | Alias da chave (opcional; padrão `screeaner`) |
+| `ANDROID_KEY_PASSWORD` | Senha da chave (opcional; padrão: a do keystore) |
 
 Para gerar um keystore:
 
@@ -118,6 +116,6 @@ Na declaração de permissões e na política de dados, informe que o app só se
 ## F-Droid
 
 - O app não tem dependências externas nem serviços proprietários, então é elegível ao repositório principal.
-- O F-Droid compila a partir do código-fonte da tag (`v0.4.0`) e assina com a própria chave; os metadados da ficha são lidos de `android/fastlane/metadata/android/` automaticamente.
+- O F-Droid compila a partir do código-fonte da tag (`v0.7.0`) e assina com a própria chave; os metadados da ficha são lidos de `android/fastlane/metadata/android/` automaticamente.
 - Para incluir, abra um merge request em `fdroiddata` com o arquivo `metadata/app.screeaner.yml` (subdir `android/app`, gradle `yes`, `AutoUpdateMode: Version`, `UpdateCheckMode: Tags`).
 - Como as assinaturas são diferentes, quem instalou o APK do GitHub precisa desinstalar antes de instalar a versão do F-Droid (e vice-versa).

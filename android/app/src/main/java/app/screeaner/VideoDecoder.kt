@@ -40,6 +40,9 @@ class VideoDecoder(
      */
     @Volatile var clockOffsetMicros = Long.MIN_VALUE
 
+    /** Called on the output thread with System.nanoTime() each time a frame goes to the display. */
+    @Volatile var onRendered: ((Long) -> Unit)? = null
+
     private val statsLock = Any()
     private var frames = 0
     private var decodeNanosSum = 0L
@@ -172,6 +175,7 @@ class VideoDecoder(
                         }
                     }
                     if (queuedAt.size > 64) queuedAt.clear()
+                    onRendered?.invoke(now)
                 }
             } catch (e: IllegalStateException) {
                 if (running) Log.w(TAG, "Decoder output failed", e)

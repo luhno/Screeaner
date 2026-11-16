@@ -3,6 +3,7 @@ import CoreGraphics
 import Foundation
 import Network
 import ServiceManagement
+import ScreeanerCore
 
 /// One row of the tablet list in the menu.
 struct TabletRow: Identifiable {
@@ -10,6 +11,8 @@ struct TabletRow: Identifiable {
     var name: String
     var detail: String
     var stats: String
+    /// The encoder fell back to normal rate control (about one frame more latency).
+    var encoderNormal = false
 }
 
 /// App-wide state. Everything here runs on the main queue.
@@ -32,6 +35,8 @@ final class AppModel: ObservableObject {
     private let clipboard = ClipboardSync()
     private let pairingPanel = PairingPanel()
     private var sessions: [StreamSession] = []
+    /// "device id:version code" pairs adb already failed on, so it is not retried on every reconnect.
+    private var adbUpdateFailed = Set<String>()
     private var timer: Timer?
     private var ticks = 0
 
@@ -82,6 +87,11 @@ final class AppModel: ObservableObject {
             for other in self.sessions where other !== session && other.deviceID == device {
                 other.stop()
             }
+            self.updateIfOutdated(session)
+        }
+        session.onLegacyClient = { [weak self, weak session] in
+            guard let self, let session else { return }
+            self.updateLegacy(session)
         }
         session.onStatus = { [weak self, weak session] message in
             guard let self, let session else { return }
@@ -109,6 +119,44 @@ final class AppModel: ObservableObject {
         sessions.append(session)
         session.start()
         refreshRows()
+    }
+
+    /// Brings an outdated tablet to the app version bundled here: adb over USB
+    /// (no taps; the app reopens by itself), else an offer the tablet accepts with one tap.
+    /// A tablet with an app from before the secure protocol (0.6 or older)
+    /// can only be updated: it cannot stream with this Mac.
+    private func updateLegacy(_ session: StreamSession) {
+        guard let apk = TabletApk.bundled else {
+            status = "\(session.clientName) tem um app antigo (v\(session.clientVersion ?? "?")): instale a versão \(Proto.appVersion) no tablet"
+            return
+        }
+        status = "\(session.clientName) tem um app antigo: enviando a v\(apk.versionName)…"
+        update(session, to: apk)
+    }
+
+    private func updateIfOutdated(_ session: StreamSession) {
+        guard let apk = TabletApk.bundled,
+              TabletVersion.isOutdated(tabletVersion: session.clientVersion, bundledCode: apk.versionCode)
+        else { return }
+        update(session, to: apk)
+    }
+
+    private func update(_ session: StreamSession, to apk: TabletApk) {
+        let key = "\(session.deviceID ?? session.clientName):\(apk.versionCode)"
+        guard session.connection.isLoopback, adbAvailable, !adbUpdateFailed.contains(key) else {
+            session.offerUpdate(apk)
+            return
+        }
+        status = "Atualizando o app do tablet para v\(apk.versionName)…"
+        adb.install(apk.url, model: session.clientName) { [weak self, weak session] installed in
+            guard let self else { return }
+            if installed {
+                self.status = "App do tablet atualizado para v\(apk.versionName)"
+            } else {
+                self.adbUpdateFailed.insert(key)
+                session?.offerUpdate(apk)
+            }
+        }
     }
 
     // MARK: - Pairing
@@ -155,7 +203,8 @@ final class AppModel: ObservableObject {
             let id = ObjectIdentifier(session)
             return TabletRow(
                 id: id, name: session.clientName, detail: session.summary,
-                stats: stats[id] ?? previous[id] ?? ""
+                stats: stats[id] ?? previous[id] ?? "",
+                encoderNormal: session.lowLatencyEncoder == false
             )
         }
         if !sessions.isEmpty, sessions.allSatisfy({ $0.failure == nil }) {

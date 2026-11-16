@@ -5,12 +5,12 @@ import android.app.AlertDialog
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
+import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
-import android.graphics.RectF
 import android.view.InputDevice
 import android.view.KeyEvent
 import android.view.MotionEvent
@@ -29,6 +29,8 @@ import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.Spinner
 import android.widget.TextView
+import android.widget.Toast
+import java.io.File
 import java.util.Locale
 import java.util.UUID
 import kotlin.math.abs
@@ -42,21 +44,39 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
     private lateinit var surfaceView: SurfaceView
     private lateinit var overlay: View
     private lateinit var statusText: TextView
+    private lateinit var statusLabel: TextView
+    private lateinit var radar: RadarView
+    private lateinit var latencyValue: TextView
+    private lateinit var latencyPeak: TextView
+    private lateinit var breakdownBar: SegmentBar
+    private lateinit var encoderText: TextView
+    private lateinit var testProgress: DotProgressView
     private lateinit var hud: TextView
     private lateinit var hostInput: EditText
     private lateinit var discovery: Discovery
 
     private val handler = Handler(Looper.getMainLooper())
-    private var client: StreamClient? = null
+    @Volatile private var client: StreamClient? = null
+    /** Settings the benchmark asks of the Mac for the current stream; null = the Mac's own. */
+    private var streamOverride: StreamOverride? = null
+    @Volatile private var benchmark: Benchmark? = null
+    private lateinit var benchmarkButton: Button
+    /** Update versions already offered in this run: asked once, not on every reconnect. */
+    private val updatesAsked = HashSet<Int>()
+    /** The user accepted but first had to allow installs from this app in Settings. */
+    private var updateAfterPermission = false
+    private var updateDialog: AlertDialog? = null
     private var refreshRate = 60f
     private var hudMode = HUD_OFF
     private lateinit var monitor: View
     private lateinit var latencyText: TextView
     private lateinit var performanceText: TextView
     private lateinit var latencyGraph: GraphView
-    private lateinit var fpsGraph: GraphView
     private lateinit var recordButton: Button
     private lateinit var recordInfo: TextView
+    private lateinit var probeButton: Button
+    private lateinit var probeInfo: TextView
+    private var probing = false
     private lateinit var deviceMonitor: DeviceMonitor
     private lateinit var recorder: SessionRecorder
     private var appVersion = "?"
@@ -72,8 +92,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
     private lateinit var shortcutBar: ShortcutBar
     private lateinit var sidebar: View
     private lateinit var clipboardBridge: ClipboardBridge
-    private lateinit var probe: LatencyProbe
-    private lateinit var measureButton: Button
     private lateinit var pairingBox: View
     private lateinit var pairingCode: TextView
     private lateinit var pairingHint: TextView
@@ -89,6 +107,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
     private var optSidebar = false
     private var optCtrlIsCmd = false
     private var shortcuts: Set<String> = ShortcutBar.DEFAULT
+    private var wifiLock: WifiManager.WifiLock? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -102,6 +121,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
         surfaceView = findViewById(R.id.surface)
         overlay = findViewById(R.id.overlay)
         statusText = findViewById(R.id.status)
+        statusLabel = findViewById(R.id.statusLabel)
+        radar = findViewById(R.id.radar)
+        overlay.background = DotGridDrawable(this)
         hud = findViewById(R.id.hud)
         hostInput = findViewById(R.id.hostInput)
         discovery = Discovery(applicationContext)
@@ -162,6 +184,37 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
             }
         }
         surfaceView.holder.addCallback(this)
+        // Android batches input to the next vsync by default; deliver every
+        // touch, stylus, hover and mouse sample the moment it arrives instead.
+        if (Build.VERSION.SDK_INT >= 30) {
+            surfaceView.requestUnbufferedDispatch(
+                InputDevice.SOURCE_CLASS_POINTER or InputDevice.SOURCE_CLASS_POSITION,
+            )
+        }
+    }
+
+    /**
+     * Keeps the Wi-Fi radio out of power save while streaming: power save
+     * parks the radio between beacons and adds 50–100 ms spikes. Low-latency
+     * mode (Android 10+) also tells the driver to favour latency over battery.
+     */
+    private fun holdWifi(hold: Boolean) {
+        if (!hold) {
+            wifiLock?.takeIf { it.isHeld }?.release()
+            return
+        }
+        val lock = wifiLock ?: run {
+            val wifi = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager ?: return
+            @Suppress("DEPRECATION")
+            val mode = if (Build.VERSION.SDK_INT >= 29) {
+                WifiManager.WIFI_MODE_FULL_LOW_LATENCY
+            } else {
+                WifiManager.WIFI_MODE_FULL_HIGH_PERF
+            }
+            wifi.createWifiLock(mode, "screeaner:stream").apply { setReferenceCounted(false) }
+                .also { wifiLock = it }
+        }
+        if (!lock.isHeld) lock.acquire()
     }
 
     /** A keyboard attached to the tablet types on the Mac while streaming. */
@@ -188,7 +241,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
         return super.dispatchKeyEvent(event)
     }
 
-    // region Options, pairing, shortcuts, clipboard and end-to-end probe
+    // region Options, pairing, shortcuts and clipboard
 
     private fun loadOptions() {
         optAudio = prefs.getBoolean(PREF_AUDIO, false)
@@ -225,9 +278,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
         }
         shortcutBar.build(shortcuts)
         clipboardBridge = ClipboardBridge(this) { text -> if (optClipboard) client?.sendClipboard(text) }
-        probe = LatencyProbe(surfaceView) { client }
-        measureButton = findViewById(R.id.measure)
-        measureButton.setOnClickListener { runProbe() }
         findViewById<Button>(R.id.options).setOnClickListener { showOptions() }
         findViewById<Button>(R.id.monitorOptions).setOnClickListener { showOptions() }
     }
@@ -300,24 +350,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
         restartClient.run()
     }
 
-    private fun runProbe() {
-        measureButton.isEnabled = false
-        recordInfo.text = getString(R.string.measuring)
-        probe.run { result ->
-            measureButton.isEnabled = true
-            if (result == null || result.samples.isEmpty()) {
-                recordInfo.text = getString(R.string.measure_failed)
-                return@run
-            }
-            val text = getString(
-                R.string.measure_result, format("%.1f", result.average), format("%.1f", result.minimum),
-                format("%.1f", result.p95), result.samples.size, result.attempts,
-            )
-            recordInfo.text = text
-            recorder.note(text)
-        }
-    }
-
     // endregion
 
     // region Display mode (extension / main display / mirror)
@@ -381,32 +413,135 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
             "?"
         }
         val about = "Screeaner v$appVersion · Android ${Build.VERSION.RELEASE} · ${Build.MODEL}"
-        findViewById<TextView>(R.id.version).text = about
+        findViewById<TextView>(R.id.version).text = "$about   ·   ${getString(R.string.footer_gestures)}"
 
         monitor = findViewById(R.id.monitor)
         latencyText = findViewById(R.id.latencyText)
         performanceText = findViewById(R.id.performanceText)
         latencyGraph = findViewById(R.id.latencyGraph)
-        fpsGraph = findViewById(R.id.fpsGraph)
+        latencyValue = findViewById(R.id.latencyValue)
+        latencyPeak = findViewById(R.id.latencyPeak)
+        breakdownBar = findViewById(R.id.breakdownBar)
+        encoderText = findViewById(R.id.encoderText)
+        testProgress = findViewById(R.id.testProgress)
         recordButton = findViewById(R.id.record)
         recordInfo = findViewById(R.id.recordInfo)
-        findViewById<TextView>(R.id.monitorTitle).text = about
-        latencyGraph.configure(
-            "ms", 20f,
-            "total" to 0xFFFFFFFF.toInt(), "dec" to 0xFFFFB454.toInt(),
-            "rede" to 0xFF7CFFB2.toInt(), "enc" to 0xFF4F8CFF.toInt(),
-        )
-        fpsGraph.configure("fps", 30f, "fps" to 0xFF7CFFB2.toInt(), "Mbps" to 0xFF4F8CFF.toInt())
+        findViewById<TextView>(R.id.monitorTitle).text = "02 / Monitor · v$appVersion · ${Build.MODEL}"
+        // Red dots mark seconds clearly worse than a good stream (over ~2 frames at 60 Hz).
+        latencyGraph.configure("ms", 20f, alertAbove = 36f)
 
         deviceMonitor = DeviceMonitor(applicationContext)
         recorder = SessionRecorder(applicationContext)
         recordButton.setOnClickListener { toggleRecording() }
-        findViewById<Button>(R.id.share).setOnClickListener { shareLastSession() }
+        probeButton = findViewById(R.id.probe)
+        probeInfo = findViewById(R.id.probeInfo)
+        probeButton.setOnClickListener { toggleLatencyTest() }
+        benchmarkButton = findViewById(R.id.benchmark)
+        benchmarkButton.setOnClickListener { toggleBenchmark() }
+        findViewById<View>(R.id.share).setOnClickListener { shareLastSession() }
     }
 
     private fun applyHudMode() {
         hud.visibility = if (streaming && hudMode == HUD_COMPACT) View.VISIBLE else View.GONE
         monitor.visibility = if (streaming && hudMode == HUD_FULL) View.VISIBLE else View.GONE
+    }
+
+    private fun toggleLatencyTest() {
+        if (benchmark != null) {
+            probeInfo.text = getString(R.string.benchmark_busy)
+            return
+        }
+        val current = client
+        if (probing) {
+            current?.cancelLatencyTest()
+            return
+        }
+        val started = current?.startLatencyTest(object : LatencyTest.Listener {
+            override fun onProgress(done: Int, total: Int, lastMs: Double) = runOnUiThread {
+                probeButton.text = getString(R.string.probe_running, done, total)
+                testProgress.set(1, total, done)
+                probeInfo.text = getString(R.string.probe_last, format("%.1f", lastMs))
+            }
+
+            override fun onFinished(result: LatencyTest.Result) = runOnUiThread { showLatencyResult(result) }
+        }) ?: false
+        if (started) {
+            probing = true
+            probeButton.text = getString(R.string.probe_running, 0, LatencyTest.SAMPLES)
+            probeInfo.text = getString(R.string.probe_started)
+            testProgress.set(1, LatencyTest.SAMPLES, 0)
+            testProgress.visibility = View.VISIBLE
+        } else {
+            probeInfo.text = getString(R.string.probe_unavailable)
+        }
+    }
+
+    private fun showLatencyResult(result: LatencyTest.Result) {
+        probing = false
+        probeButton.text = getString(R.string.probe_start)
+        testProgress.visibility = View.GONE
+        val lines = result.lines()
+        val problem = when (result.outcome) {
+            LatencyTest.Outcome.NO_MAC -> getString(R.string.probe_no_mac)
+            LatencyTest.Outcome.NO_SQUARE -> getString(R.string.probe_no_square)
+            LatencyTest.Outcome.CANCELLED -> getString(R.string.probe_cancelled)
+            LatencyTest.Outcome.DONE -> null
+        }
+        probeInfo.text = (lines + listOfNotNull(problem)).joinToString("\n")
+        if (lines.isNotEmpty()) recorder.note(lines)
+    }
+
+    private fun toggleBenchmark() {
+        benchmark?.let {
+            it.cancel()
+            return
+        }
+        val info = client?.streamInfo
+        if (!streaming || info == null || probing) {
+            probeInfo.text = getString(R.string.probe_unavailable)
+            return
+        }
+        val configs = Benchmark.configsFor(VideoDecoder.supportedCodecs(info.width, info.height), refreshRate.roundToInt())
+        val setup = listOf(
+            "tablet: ${Build.MANUFACTURER} ${Build.MODEL} · Android ${Build.VERSION.RELEASE} · app $appVersion",
+            "mac: ${info.macName} · app ${info.macVersion}",
+            "stream: ${info.width}x${info.height} · painel ${refreshRate.roundToInt()} Hz",
+        )
+        val run = Benchmark(
+            host = object : Benchmark.Host {
+                override fun restartStream(override: StreamOverride?) = runOnUiThread {
+                    streamOverride = override
+                    startClient(force = true)
+                }
+
+                override fun currentClient(): StreamClient? = client
+            },
+            configs = configs,
+            listener = object : Benchmark.Listener {
+                override fun onStep(text: String) = runOnUiThread { probeInfo.text = text }
+                override fun onProgress(done: Int, total: Int) = runOnUiThread {
+                    testProgress.set(configs.size, Benchmark.PHASES, done)
+                }
+                override fun onFinished(report: Benchmark.Report) = runOnUiThread { showBenchmark(report, setup) }
+            },
+        )
+        benchmark = run
+        benchmarkButton.text = getString(R.string.benchmark_stop)
+        probeInfo.text = getString(R.string.benchmark_started)
+        testProgress.set(configs.size, Benchmark.PHASES, 0)
+        testProgress.visibility = View.VISIBLE
+        run.start()
+    }
+
+    private fun showBenchmark(report: Benchmark.Report, setup: List<String>) {
+        benchmark = null
+        benchmarkButton.text = getString(R.string.benchmark_start)
+        testProgress.visibility = View.GONE
+        val lines = report.lines()
+        val saved = if (report.results.isNotEmpty()) recorder.saveReport(setup, report.csv(), lines) else null
+        if (recorder.isRecording) recorder.note(lines)
+        probeInfo.text = (lines + listOfNotNull(saved?.let { getString(R.string.benchmark_saved, it) }))
+            .joinToString("\n")
     }
 
     private fun toggleRecording() {
@@ -419,7 +554,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
             "tablet: ${Build.MANUFACTURER} ${Build.MODEL} · Android ${Build.VERSION.RELEASE} · app $appVersion",
             "mac: ${info?.macName ?: "?"} · app ${info?.macVersion ?: "?"}",
             "exibição: ${info?.mode ?: displayMode} · posição $displayPosition",
-            "stream: ${info?.width}x${info?.height} · ${info?.codec} · ${info?.fps} fps · painel ${refreshRate.roundToInt()} Hz",
+            "stream: ${info?.width}x${info?.height} · ${info?.describe()} · painel ${refreshRate.roundToInt()} Hz",
         )
         if (recorder.start(setup)) {
             recordButton.text = getString(R.string.record_stop, "0:00")
@@ -469,38 +604,57 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
         }
 
         var compact = format(
-            "%s · %d fps · %.1f Mbps · latência %s ms (enc %.1f · rede %.1f · dec %.1f)",
+            "%s   %d fps   %.1f Mbps   %s ms",
             stream.transport, stream.fps, stream.mbps, ms(stream.latencyAvgMs),
-            stream.encodeMs, stream.networkMs, stream.decodeAvgMs,
         )
-        if (stream.packetLossPct >= 0.1) compact += format(" · perda %.1f%%", stream.packetLossPct)
-        if (recorder.isRecording) compact = "● $compact"
+        if (stream.packetLossPct >= 0.1) compact += format("   perda %.1f%%", stream.packetLossPct)
         hud.text = compact
-        // Keep the history rolling even while the panel is hidden.
-        latencyGraph.push(
-            stream.latencyAvgMs.toFloat(), stream.decodeAvgMs.toFloat(),
-            stream.networkMs.toFloat(), stream.encodeMs.toFloat(),
+        // The dot turns red while a session is being recorded.
+        hud.setCompoundDrawablesRelativeWithIntrinsicBounds(
+            if (recorder.isRecording) R.drawable.dot_signal else R.drawable.dot_ink, 0, 0, 0,
         )
-        fpsGraph.push(stream.fps.toFloat(), stream.mbps.toFloat())
+        // Keep the history rolling even while the panel is hidden.
+        latencyGraph.push(stream.latencyAvgMs.toFloat())
         if (hudMode != HUD_FULL) return
 
-        latencyText.text = format(
-            "Mac→tela  %s ms   (pico %s ms)\nencode %.1f · rede %.1f · decode %.1f (pico %.1f)",
-            ms(stream.latencyAvgMs), ms(stream.latencyMaxMs),
-            stream.encodeMs, stream.networkMs, stream.decodeAvgMs, stream.decodeMaxMs,
+        latencyValue.text = ms(stream.latencyAvgMs)
+        latencyPeak.text = format("ms · pico %s", ms(stream.latencyMaxMs))
+        breakdownBar.set(
+            floatArrayOf(
+                stream.encodeMs.toFloat(), stream.networkMs.toFloat(),
+                stream.transferAvgMs.toFloat(), stream.decodeAvgMs.toFloat(),
+            ),
+            intArrayOf(Dot.SIGNAL, Dot.ink(0.45f), Dot.ink(0.7f), Dot.INK),
         )
+        latencyText.text = format(
+            "ENC %-6.1f REDE %-5.1f TRANSF %-5.1f DEC %.1f",
+            stream.encodeMs, stream.networkMs, stream.transferAvgMs, stream.decodeAvgMs,
+        )
+        val info = client?.streamInfo
+        if (info != null && info.lowLatencyEncoder == false) {
+            encoderText.text = getString(R.string.encoder_normal, info.describe().substringBefore(" · encoder"))
+            encoderText.visibility = View.VISIBLE
+        } else {
+            encoderText.visibility = View.GONE
+        }
         performanceText.text = format(
-            "%s · %d fps · %.1f Mbps · perda %.1f%%\nquadros perdidos %d · keyframes %d\n" +
-                "CPU %.0f%% · mem %.0f MB · bat %d%% %.1f°C · térmico %s",
-            stream.transport, stream.fps, stream.mbps, stream.packetLossPct,
-            stream.framesLost, stream.keyframeRequests,
-            device.cpuPct, device.memoryMb, device.batteryPct, device.batteryTempC, device.thermal,
+            "%-9s %-9s %s\n%-9s %-9s %s\n%-9s %-9s %s",
+            "FPS", "MBPS", "PERDA",
+            stream.fps.toString(), format("%.1f", stream.mbps), format("%.2f%%", stream.packetLossPct),
+            "CPU", "MEM", "BATERIA",
+        ) + "\n" + format(
+            "%-9s %-9s %s",
+            format("%.0f%%", device.cpuPct), format("%.0f MB", device.memoryMb),
+            format("%d%% %.1f°", device.batteryPct, device.batteryTempC),
+        ) + "\n" + format(
+            "%s · %s · quadros perdidos %d · keyframes %d",
+            stream.transport, info?.describe() ?: "", stream.framesLost, stream.keyframeRequests,
         )
     }
 
     override fun onDestroy() {
+        holdWifi(false)
         if (recorder.isRecording) recorder.stop()
-        probe.release()
         super.onDestroy()
     }
 
@@ -520,6 +674,10 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
 
     override fun onResume() {
         super.onResume()
+        if (updateAfterPermission && UpdateInstaller.canInstall(this)) {
+            updateAfterPermission = false
+            client?.requestUpdate()
+        }
         enterImmersive()
         discovery.start()
         clipboardBridge.start()
@@ -580,15 +738,19 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
         if (frame.width() > 0 && frame.height() > 0) client?.resize(frame.width(), frame.height())
     }
 
-    private val restartClient = Runnable {
+    private val restartClient = Runnable { startClient(force = false) }
+
+    /** (Re)connects with the surface's current size; [force] restarts even if the size did not change. */
+    private fun startClient(force: Boolean) {
         val holder = surfaceView.holder
         val frame = holder.surfaceFrame
         val width = frame.width()
         val height = frame.height()
-        if (!holder.surface.isValid || width <= 0 || height <= 0) return@Runnable
-        if (client?.hasSize(width, height) == true) return@Runnable
+        if (!holder.surface.isValid || width <= 0 || height <= 0) return
+        if (!force && client?.hasSize(width, height) == true) return
         client?.stop()
         pairingReply = null
+        streaming = false
         val metrics = resources.displayMetrics
         val physicalDpi = metrics.xdpi.roundToInt()
         val dpi = if (physicalDpi in 80..800) physicalDpi else metrics.densityDpi
@@ -611,13 +773,17 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
             discovery = discovery,
             manualHost = { manualHost },
             listener = this,
+            override = streamOverride,
+            updateDir = File(cacheDir, "updates"),
         ).also { it.start() }
     }
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
         handler.removeCallbacks(restartClient)
         handler.removeCallbacks(resizeClient)
+        benchmark?.cancel()
         streaming = false
+        holdWifi(false)
         client?.stop()
         client = null
     }
@@ -633,6 +799,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
                 pairingBox.visibility = View.GONE
                 pairingReply = null
             }
+            // A late callback from a client stopped in surfaceDestroyed must not re-take the lock.
+            holdWifi(streaming && client != null)
             when (state) {
                 StreamClient.State.STREAMING -> {
                     overlay.visibility = View.GONE
@@ -641,8 +809,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
 
                 else -> {
                     overlay.visibility = View.VISIBLE
+                    applyHudMode()
                     var text = when (state) {
-                        StreamClient.State.CONNECTING -> getString(R.string.status_connecting, detail)
+                        StreamClient.State.CONNECTING -> getString(R.string.status_connecting)
                         StreamClient.State.PAIRING -> getString(R.string.status_pairing, detail)
                         StreamClient.State.WAITING -> getString(R.string.status_waiting_stream)
                         else -> getString(R.string.status_searching)
@@ -651,6 +820,13 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
                     val denied = deniedMessage
                     if (denied != null && SystemClock.uptimeMillis() - deniedAt < 15_000) text = "$denied\n$text"
                     statusText.text = text
+                    statusLabel.text = when (state) {
+                        StreamClient.State.CONNECTING -> getString(R.string.label_connecting, detail)
+                        StreamClient.State.PAIRING -> getString(R.string.label_pairing)
+                        StreamClient.State.WAITING -> getString(R.string.label_waiting)
+                        else -> getString(R.string.label_searching)
+                    }
+                    radar.searching = state == StreamClient.State.SEARCHING
                 }
             }
             applyHudMode()
@@ -685,9 +861,52 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
         runOnUiThread { if (optClipboard) clipboardBridge.apply(text) }
     }
 
-    override fun onProbeInfo(area: RectF) = probe.onProbeInfo(area)
+    override fun onUpdateOffer(offer: StreamClient.UpdateOffer) {
+        runOnUiThread {
+            // Back from allowing installs: the stream reconnected, so the offer is new; just take it.
+            if (updateAfterPermission && UpdateInstaller.canInstall(this)) {
+                updateAfterPermission = false
+                client?.requestUpdate()
+                return@runOnUiThread
+            }
+            if (!updatesAsked.add(offer.versionCode) || benchmark != null || isFinishing) return@runOnUiThread
+            updateDialog?.dismiss()
+            updateDialog = AlertDialog.Builder(this)
+                .setTitle(getString(R.string.update_title, offer.versionName))
+                .setMessage(getString(R.string.update_message, appVersion, offer.size / 1024))
+                .setPositiveButton(R.string.update_accept) { _, _ ->
+                    if (UpdateInstaller.canInstall(this)) {
+                        client?.requestUpdate()
+                    } else {
+                        updateAfterPermission = true
+                        Toast.makeText(this, R.string.update_permission, Toast.LENGTH_LONG).show()
+                        UpdateInstaller.openPermissionSettings(this)
+                    }
+                }
+                .setNegativeButton(R.string.update_later, null)
+                .show()
+        }
+    }
+
+    override fun onUpdateDownloaded(apk: File, offer: StreamClient.UpdateOffer) {
+        runOnUiThread {
+            try {
+                UpdateInstaller.install(this, apk)
+            } catch (e: Exception) {
+                Toast.makeText(this, getString(R.string.update_failed, e.message ?: "?"), Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        if (intent.action == UpdateInstaller.ACTION_RESULT) {
+            UpdateInstaller.handleResult(this, intent)?.let { Toast.makeText(this, it, Toast.LENGTH_LONG).show() }
+        }
+    }
 
     override fun onSample(sample: StreamSample) {
+        benchmark?.onSample(sample)
         runOnUiThread { showSample(sample) }
     }
 
@@ -807,6 +1026,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
                 val secondary = event.buttonState and
                     (MotionEvent.BUTTON_SECONDARY or MotionEvent.BUTTON_STYLUS_PRIMARY) != 0
                 button = if (secondary) Protocol.BUTTON_RIGHT else Protocol.BUTTON_LEFT
+                if (Build.VERSION.SDK_INT < 30) surfaceView.requestUnbufferedDispatch(event)
                 if (tool != MotionEvent.TOOL_TYPE_FINGER) {
                     pendingDown = false
                     downSent = true
@@ -814,6 +1034,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
                 } else {
                     pendingDown = true
                     downSent = false
+                    // The click waits a moment in case a second finger lands,
+                    // but the cursor can jump under the finger right away.
+                    send(Protocol.ACTION_HOVER, downX, downY, 0f)
                     handler.postDelayed(flushDown, FINGER_DOWN_DELAY_MS)
                 }
             }

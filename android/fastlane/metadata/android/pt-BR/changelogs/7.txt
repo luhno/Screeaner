@@ -1,0 +1,8 @@
+0.7.0
+• Pareamento com código e criptografia de ponta a ponta
+• Correção de erros Reed-Solomon no Wi-Fi
+• Caneta como mesa digitalizadora, rejeição de palma e barra de atalhos
+• Áudio do Mac, área de transferência e teclado ABNT2
+• Modos: extensão, monitor principal, espelhar e só o tablet
+• Teste toque→tela, benchmark e atualização automática pelo Mac
+• Novo visual Screeaner Dot
