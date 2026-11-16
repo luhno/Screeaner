@@ -19,6 +19,10 @@ struct TabletRow: Identifiable, Equatable {
     var encoderNormal = false
     /// "H.264" or "HEVC", to word the encoder hint.
     var codec = ""
+    /// The tablet's device id once the handshake is done.
+    var deviceID: String?
+    /// nil when the tablet is not in the paired list (still pairing, old app).
+    var favorite: Bool?
 }
 
 /// A message shown at the top of the menu until it expires (info) or is closed (error).
@@ -163,7 +167,10 @@ final class AppModel: ObservableObject {
             self.pairingPanel.show(model: self)
         }
         session.onPairingFinished = { [weak self] id in self?.dismissRequest(id) }
-        session.onPaired = { [weak self] in self?.pairedTablets = PairingStore.shared.tablets }
+        session.onPaired = { [weak self] in
+            self?.pairedTablets = PairingStore.shared.tablets
+            self?.refreshRows()
+        }
         session.onClipboard = { [weak self] text in self?.clipboard.apply(text) }
         sessions.append(session)
         session.start()
@@ -213,9 +220,26 @@ final class AppModel: ObservableObject {
 
     // MARK: - Pairing
 
-    func respond(to request: PairingRequest, allowed: Bool) {
+    func respond(to request: PairingRequest, decision: PairingDecision) {
         dismissRequest(request.id)
-        request.decide(allowed)
+        request.decide(decision)
+    }
+
+    /// Favorite mode: a favorite connects by itself without a code; once there is one,
+    /// the other paired tablets need approval (unless the menu setting is off).
+    /// Tablets already streaming are never cut.
+    func setFavorite(_ deviceId: String, _ favorite: Bool) {
+        let hadFavorites = PairingStore.shared.hasFavorites
+        PairingStore.shared.setFavorite(deviceId: deviceId, favorite)
+        pairedTablets = PairingStore.shared.tablets
+        refreshRows()
+        let hasFavorites = PairingStore.shared.hasFavorites
+        let favoritesOnly = UserDefaults.standard.bool(forKey: SettingsKey.favoritesOnly)
+        if favorite && !hadFavorites && favoritesOnly {
+            show("Modo favorito ligado: só os tablets com ★ conectam sozinhos; os outros pedem aprovação")
+        } else if !hasFavorites && hadFavorites {
+            show("Sem favoritos: todos os tablets autorizados voltam a conectar sozinhos")
+        }
     }
 
     private func dismissRequest(_ id: UUID) {
@@ -299,7 +323,9 @@ final class AppModel: ObservableObject {
                 status: session.lastStatus,
                 live: live,
                 encoderNormal: session.lowLatencyEncoder == false,
-                codec: session.codecName
+                codec: session.codecName,
+                deviceID: session.deviceID,
+                favorite: session.deviceID.flatMap { id in pairedTablets.first { $0.id == id }?.favorite }
             )
         }
         // Only publish real changes: every publish redraws the whole menu.

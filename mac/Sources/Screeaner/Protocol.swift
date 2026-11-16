@@ -14,7 +14,7 @@ enum Proto {
     /// First four bytes ("SCRN") of the datagram the tablet sends to open the UDP path.
     static let udpMagic: UInt32 = 0x5343_524E
     /// Shown in the menu and sent to the tablet (which logs it in test sessions).
-    static let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.7.1"
+    static let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.7.2"
 
     /// The host clock in microseconds: frame timestamps, pongs and probe acks all use it.
     static func hostClockMicros() -> UInt64 {
@@ -108,6 +108,8 @@ struct StreamConfig: Encodable {
     let lowLatency: Bool
     /// Whether each frame is capped at a multiple of the average frame size.
     let frameCap: Bool
+    /// This tablet is a favorite here: it may remember this Mac's address and try it first.
+    let favorite: Bool
 }
 
 enum Codec: String {

@@ -294,6 +294,8 @@ class StreamClient(
             val port = text.substringAfter(':', "").toIntOrNull() ?: Protocol.PORT
             list += Discovery.Endpoint(host, port)
         }
+        // A Mac that marked this tablet as favorite: no need to wait for Bonjour.
+        trust.favoriteHost()?.let { list += it }
         list += discovery.endpoints
         val now = System.nanoTime()
         return list.distinct().filter { (badUntil[it] ?: 0L) <= now }
@@ -504,6 +506,14 @@ class StreamClient(
                         }
                         if (!gotConfig) {
                             gotConfig = true
+                            if (!overUsb) {
+                                val address = socket.inetAddress.hostAddress
+                                if (address != null) {
+                                    trust.updateFavoriteHost(
+                                        Discovery.Endpoint(address, socket.port), json.optBoolean("favorite", false),
+                                    )
+                                }
+                            }
                             if (json.optBoolean("audio", false)) audio = AudioPlayer()
                             val token = json.optLong("token", 0L).toInt()
                             if (token != 0 && !overUsb) {

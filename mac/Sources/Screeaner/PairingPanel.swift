@@ -9,7 +9,7 @@ final class PairingPanel {
     func show(model: AppModel) {
         if panel == nil {
             let panel = NSPanel(
-                contentRect: NSRect(x: 0, y: 0, width: 380, height: 240),
+                contentRect: NSRect(x: 0, y: 0, width: 380, height: 300),
                 styleMask: [.titled, .nonactivatingPanel, .utilityWindow],
                 backing: .buffered, defer: false
             )
@@ -38,8 +38,8 @@ struct PairingView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             ForEach(model.pairingRequests) { request in
-                PairingRequestView(request: request) { allowed in
-                    model.respond(to: request, allowed: allowed)
+                PairingRequestView(request: request) { decision in
+                    model.respond(to: request, decision: decision)
                 }
             }
         }
@@ -51,20 +51,28 @@ struct PairingView: View {
     }
 }
 
-/// "Tablet X wants to use this Mac", the six-digit code and Allow / Refuse.
+/// "Tablet X wants to use this Mac", the six-digit code, a favorite switch and Allow / Refuse.
 struct PairingRequestView: View {
     let request: PairingRequest
-    let decide: (Bool) -> Void
+    let decide: (PairingDecision) -> Void
+    @State private var favorite = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 6) {
                 DotMarker(color: Dot.signal)
-                DotLabel(text: "Pareamento")
+                DotLabel(text: request.known ? "Conexão" : "Pareamento")
             }
-            Text("\(request.name) quer usar este Mac como monitor")
+            Text(request.known
+                 ? "\(request.name) quer conectar"
+                 : "\(request.name) quer usar este Mac como monitor")
                 .font(Dot.text(14, .semibold))
                 .fixedSize(horizontal: false, vertical: true)
+            if request.known {
+                Text("Ele já é autorizado, mas só os tablets com ★ conectam sozinhos.")
+                    .font(Dot.text(12)).foregroundStyle(Dot.inkSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             Text("Confira se o tablet mostra o mesmo código:")
                 .font(Dot.text(12)).foregroundStyle(Dot.inkSecondary)
             Text(PairingRequestView.format(request.code))
@@ -74,11 +82,14 @@ struct PairingRequestView: View {
             Text("Ao permitir, o tablet poderá ver a tela e controlar o mouse e o teclado deste Mac.")
                 .font(Dot.text(11.5)).foregroundStyle(Dot.inkSecondary)
                 .fixedSize(horizontal: false, vertical: true)
+            Toggle("★ Favorito: conecta sozinho, sem código", isOn: $favorite)
+                .toggleStyle(DotToggleStyle())
+                .padding(.vertical, 4)
             HStack {
-                Button("Recusar") { decide(false) }.buttonStyle(DotButtonStyle())
+                Button("Recusar") { decide(.refuse) }.buttonStyle(DotButtonStyle())
                 Spacer()
                 // Deliberately no default (Return) shortcut: allowing must be a click.
-                Button("Permitir") { decide(true) }
+                Button("Permitir") { decide(favorite ? .allowFavorite : .allow) }
                     .buttonStyle(DotButtonStyle(primary: true))
             }
         }

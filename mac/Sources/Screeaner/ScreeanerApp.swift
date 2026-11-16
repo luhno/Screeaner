@@ -38,6 +38,7 @@ struct MenuView: View {
     @AppStorage(SettingsKey.clipboard) private var clipboard = true
     @AppStorage(SettingsKey.autoOpenApp) private var autoOpenApp = true
     @AppStorage(SettingsKey.mirrorScreen) private var mirrorScreen = ""
+    @AppStorage(SettingsKey.favoritesOnly) private var favoritesOnly = true
     @State private var showPaired = false
     @State private var contentHeight: CGFloat = 0
 
@@ -72,8 +73,8 @@ struct MenuView: View {
     private var content: some View {
         VStack(alignment: .leading, spacing: 16) {
             ForEach(model.pairingRequests) { request in
-                PairingRequestView(request: request) { allowed in
-                    model.respond(to: request, allowed: allowed)
+                PairingRequestView(request: request) { decision in
+                    model.respond(to: request, decision: decision)
                 }
                 .padding(14)
                 .background(RoundedRectangle(cornerRadius: 14).fill(Dot.surface))
@@ -147,6 +148,10 @@ struct MenuView: View {
             HStack(spacing: 6) {
                 if tablet.live { DotMarker(color: Dot.signal) }
                 Text(tablet.name).font(Dot.text(14, .semibold))
+                Spacer(minLength: 4)
+                if let id = tablet.deviceID, let favorite = tablet.favorite {
+                    starButton(favorite: favorite) { model.setFavorite(id, !favorite) }
+                }
             }
             if !tablet.status.isEmpty && tablet.status != "Transmitindo" {
                 Text(tablet.status).font(Dot.text(12)).foregroundStyle(Dot.inkSecondary)
@@ -256,14 +261,32 @@ struct MenuView: View {
         .onChange(of: autoAdb) { model.autoAdbChanged($0) }
     }
 
+    /// ★ / ☆: favorites connect by themselves, without a code.
+    private func starButton(favorite: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(favorite ? "★" : "☆")
+                .font(.system(size: 17))
+                .foregroundStyle(favorite ? Dot.signal : Dot.inkSecondary)
+                .frame(width: 28, height: 24)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(favorite ? "Favorito: conecta sozinho. Clique para desmarcar." : "Marcar como favorito: conecta sozinho, sem código")
+        .accessibilityLabel(favorite ? "Desmarcar favorito" : "Marcar como favorito")
+    }
+
+    private var favoriteCount: Int { model.pairedTablets.filter(\.favorite).count }
+
     /// Tablets allowed to connect without a code; removing one makes it pair again.
+    /// With a favorite (★) marked, only favorites connect by themselves.
     private var paired: some View {
         VStack(alignment: .leading, spacing: 8) {
             Button {
                 showPaired.toggle()
             } label: {
                 HStack {
-                    DotLabel(text: "Tablets autorizados · \(model.pairedTablets.count)")
+                    DotLabel(text: "Tablets autorizados · \(model.pairedTablets.count)"
+                             + (favoriteCount > 0 ? " · ★ \(favoriteCount)" : ""))
                     Spacer()
                     Text(showPaired ? "ocultar" : "mostrar").font(Dot.mono(10.5)).foregroundStyle(Dot.inkSecondary)
                 }
@@ -276,8 +299,21 @@ struct MenuView: View {
                         .font(Dot.text(12)).foregroundStyle(Dot.inkSecondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+                if !model.pairedTablets.isEmpty {
+                    Text(favoriteCount == 0
+                         ? "Marque ★ no tablet que deve conectar sozinho, sem código nem aprovação."
+                         : (favoritesOnly
+                            ? "Modo favorito: os tablets com ★ conectam sozinhos; os outros pedem aprovação no Mac."
+                            : "Todos os autorizados conectam sozinhos; ★ só marca os preferidos."))
+                        .font(Dot.text(12)).foregroundStyle(Dot.inkSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if favoriteCount > 0 {
+                        toggleRow("Só favoritos conectam sozinhos", isOn: $favoritesOnly)
+                    }
+                }
                 ForEach(model.pairedTablets) { tablet in
                     HStack(alignment: .center, spacing: 10) {
+                        starButton(favorite: tablet.favorite) { model.setFavorite(tablet.id, !tablet.favorite) }
                         VStack(alignment: .leading, spacing: 2) {
                             Text(tablet.name).font(Dot.text(13, .medium))
                             Text("pareado em \(tablet.pairedAt.formatted(date: .abbreviated, time: .shortened))")

@@ -18,13 +18,24 @@ enum SettingsKey {
     static let autoOpenApp = "autoOpenApp"
     /// Name of the Mac screen the mirror mode shows (empty = main screen).
     static let mirrorScreen = "mirrorScreen"
+    /// Once a tablet is marked as favorite, the other paired tablets need approval to connect.
+    static let favoritesOnly = "favoritesOnly"
 
     static func registerDefaults() {
         UserDefaults.standard.register(defaults: [
             hiDPI: true, fps: 60, bitrateMbps: 20, codec: Codec.h264.rawValue, autoAdb: true,
             adaptiveBitrate: true, udpOverWifi: true, clipboard: true, autoOpenApp: true, mirrorScreen: "",
+            favoritesOnly: true,
         ])
     }
+}
+
+/// What the user answered to a pairing request.
+enum PairingDecision {
+    case refuse
+    case allow
+    /// Allow and mark as favorite: from now on it connects by itself, without a code.
+    case allowFavorite
 }
 
 /// A tablet waiting for the user to allow it, showing `code` on both screens.
@@ -32,7 +43,9 @@ struct PairingRequest: Identifiable {
     let id = UUID()
     let name: String
     let code: String
-    let decide: (Bool) -> Void
+    /// Already paired, but not a favorite while the Mac only lets favorites in by themselves.
+    let known: Bool
+    let decide: (PairingDecision) -> Void
 }
 
 /// Everything for one tablet: the pairing handshake, then
@@ -86,6 +99,7 @@ final class StreamSession {
     // Connection queue: handshake and input
     private var handshake = Handshake.waitingHello
     private var approved = false
+    private var approvedFavorite = false
     private var confirmed = false
     private var injector: InputInjector?
 
@@ -128,6 +142,8 @@ final class StreamSession {
     private var stopped = false
     private var established = false
     private var legacyClient = false
+    /// Device id and how long to snooze it if the pending approval is refused or times out.
+    private var refusalSnooze: (deviceId: String, seconds: TimeInterval)?
     private var videoKeys: SecureChannel.Session?
     private var clipboardEnabled = false
     private var frames = 0
@@ -173,6 +189,7 @@ final class StreamSession {
                 }
                 return
             }
+            self.snoozeAfterRefusal()
             self.connection.send(.secDenied, Data("Tempo esgotado esperando a aprovação no Mac".utf8))
             self.stop()
         }
@@ -193,6 +210,15 @@ final class StreamSession {
 
     // MARK: - Pairing handshake (connection queue)
 
+    /// A refused or unanswered tablet keeps retrying: leave the user alone for a while.
+    private func snoozeAfterRefusal() {
+        lock.lock()
+        let snooze = refusalSnooze
+        refusalSnooze = nil
+        lock.unlock()
+        if let snooze { PairingStore.shared.snooze(deviceId: snooze.deviceId, seconds: snooze.seconds) }
+    }
+
     private var isEstablished: Bool {
         lock.lock()
         defer { lock.unlock() }
@@ -208,7 +234,17 @@ final class StreamSession {
         switch (type, handshake) {
         case (.secHello, .waitingHello):
             guard let hello = try? SecureChannel.Hello(payload: payload) else { return abortHandshake() }
-            let known = store.isPaired(deviceId: hello.deviceId, publicKey: hello.staticPublic)
+            let trust = store.trust(deviceId: hello.deviceId, publicKey: hello.staticPublic)
+            // Favorite mode: with a favorite marked, only favorites connect without asking.
+            let favoritesOnly = UserDefaults.standard.bool(forKey: SettingsKey.favoritesOnly) && store.hasFavorites
+            let known = trust == .favorite || (trust == .paired && !favoritesOnly)
+            if !known && store.isSnoozed(deviceId: hello.deviceId) {
+                let reason = trust == .paired
+                    ? "Este Mac só conecta sozinho os tablets favoritos. Marque ★ neste tablet no menu do Screeaner no Mac."
+                    : "O Mac recusou este tablet há pouco. Tente de novo em instantes."
+                connection.send(.secDenied, Data(reason.utf8))
+                return abortHandshake()
+            }
             let ephemeral = P256.KeyAgreement.PrivateKey()
             let server = SecureChannel.buildServer(
                 staticPublic: store.identity.publicKey.x963Representation,
@@ -230,7 +266,14 @@ final class StreamSession {
             let transcript = SecureChannel.transcript(hello: helloPayload, server: serverPayload, reveal: payload)
             let session = SecureChannel.Session(ee: ee, ss: ss, transcript: transcript, tabletSide: false)
             handshake = .waitingConfirm(session: session, hello: hello, needsApproval: !known)
-            if !known { askUser(name: hello.name, code: session.sas) }
+            if !known {
+                let paired = store.trust(deviceId: hello.deviceId, publicKey: hello.staticPublic) != .unknown
+                lock.lock()
+                // A paired tablet that is not a favorite would otherwise ask again every few seconds.
+                refusalSnooze = (hello.deviceId, paired ? 300 : 30)
+                lock.unlock()
+                askUser(name: hello.name, code: session.sas, known: paired)
+            }
 
         case (.hello, .waitingHello):
             // 0.6 or older: plain HELLO, no pairing. Offer it the update instead.
@@ -264,15 +307,21 @@ final class StreamSession {
         }
     }
 
-    private func askUser(name: String, code: String) {
-        let request = PairingRequest(name: name, code: code) { [weak self] allowed in
+    private func askUser(name: String, code: String, known: Bool) {
+        let request = PairingRequest(name: name, code: code, known: known) { [weak self] decision in
             guard let self else { return }
             self.connection.queue.async {
-                if allowed {
+                switch decision {
+                case .allow, .allowFavorite:
                     self.approved = true
+                    self.approvedFavorite = decision == .allowFavorite
+                    self.lock.lock()
+                    self.refusalSnooze = nil
+                    self.lock.unlock()
                     self.finishHandshake()
-                } else {
-                    self.connection.send(.secDenied, Data("Pareamento recusado no Mac".utf8))
+                case .refuse:
+                    self.snoozeAfterRefusal()
+                    self.connection.send(.secDenied, Data((known ? "Conexão recusada no Mac" : "Pareamento recusado no Mac").utf8))
                     self.connection.close()
                 }
             }
@@ -288,7 +337,8 @@ final class StreamSession {
               confirmed, approved || !needsApproval
         else { return }
         if needsApproval {
-            PairingStore.shared.add(deviceId: hello.deviceId, name: hello.name, publicKey: hello.staticPublic)
+            PairingStore.shared.add(deviceId: hello.deviceId, name: hello.name, publicKey: hello.staticPublic,
+                                    favorite: approvedFavorite ? true : nil)
         }
         // Last clear message, then everything is encrypted.
         connection.send(.secOk, session.macConfirmation())
@@ -520,7 +570,8 @@ final class StreamSession {
             codec: codec.rawValue, width: streamWidth, height: streamHeight, fps: fps,
             token: useUdp ? token : 0, udpPort: Int(Proto.port), mode: mode.rawValue,
             server: Host.current().localizedName ?? "Mac", version: Proto.appVersion, audio: wantsAudio,
-            lowLatency: lowLatencyEncoder ?? false, frameCap: frameCap
+            lowLatency: lowLatencyEncoder ?? false, frameCap: frameCap,
+            favorite: deviceID.flatMap { PairingStore.shared.isFavorite(deviceId: $0) } ?? false
         )
         return try? JSONEncoder().encode(config)
     }

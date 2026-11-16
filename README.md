@@ -44,6 +44,17 @@ Na primeira conexão de cada tablet, **o Mac e o tablet mostram o mesmo código 
 - O código protege contra intermediários: ele é derivado das chaves dos dois lados, com um compromisso que impede um atacante de escolher chaves que gerem o mesmo número.
 - No menu do Mac, **Tablets autorizados** lista os tablets pareados e permite remover cada um. No tablet, *Opções › Esquecer Macs* faz o inverso.
 
+### Modo favorito ★
+
+Marque **★** no tablet que deve conectar sozinho: no cartão do tablet conectado, na lista **Tablets autorizados** ou já no pedido de pareamento (*★ Favorito: conecta sozinho, sem código*).
+
+- **O favorito conecta sozinho**: abriu o app no tablet, a transmissão começa, sem código e sem aprovação.
+- **Os outros pedem aprovação**: com pelo menos um favorito, os demais tablets autorizados só conectam depois de *Permitir* no Mac, com o código na tela. Assim um segundo tablet com o app aberto não "rouba" um monitor. Para voltar ao comportamento antigo, desligue *Só favoritos conectam sozinhos*. Quem já está transmitindo nunca é derrubado.
+- **Sem insistência**: um tablet recusado (ou sem resposta) espera alguns minutos antes de pedir de novo; marcar ★ nele libera na hora.
+- **Reconexão mais rápida**: o tablet favorito guarda o endereço do Mac no Wi‑Fi e tenta ele logo depois do USB, sem esperar o Bonjour.
+
+O código continua aparecendo **uma única vez**, na primeira conexão de cada tablet: é ele que impede que qualquer aparelho da rede veja a sua tela.
+
 ### 2. Tablet (Android 8+)
 
 ```bash
@@ -159,7 +170,7 @@ No painel completo, **● Gravar sessão de teste** grava uma linha por segundo 
 
 ### Versão do app
 
-A versão aparece no rodapé da tela de conexão e no título do painel do tablet (`Screeaner v0.7.1 (8) · Android … · modelo`), e no rodapé do menu do Mac. Cada lado também mostra a versão do outro: o menu do Mac lista a versão do app de cada tablet, e as sessões gravadas registram a versão do Mac.
+A versão aparece no rodapé da tela de conexão e no título do painel do tablet (`Screeaner v0.7.2 (9) · Android … · modelo`), e no rodapé do menu do Mac. Cada lado também mostra a versão do outro: o menu do Mac lista a versão do app de cada tablet, e as sessões gravadas registram a versão do Mac.
 
 ## Atualizações (sem Google Play nem App Store)
 
@@ -212,7 +223,7 @@ Notarização (opcional, exige conta Apple Developer): com um certificado *Devel
 - **UDP com correção de erros no Wi‑Fi** — desligue para forçar TCP.
 - **Codec** — H.264 (decode mais rápido na maioria dos tablets) ou HEVC (mais nítido no mesmo bitrate).
 - **Abrir ao iniciar o Mac**, **abrir o app no tablet ao conectar o USB**, **compartilhar a área de transferência** e **tela espelhada**.
-- **Tablets autorizados** — lista dos tablets pareados, com botão para remover.
+- **Tablets autorizados** — lista dos tablets pareados, com ★ (favorito: conecta sozinho), *Só favoritos conectam sozinhos* e botão para remover.
 
 Mudar um ajuste reinicia a transmissão automaticamente.
 
@@ -237,7 +248,7 @@ Mudar um ajuste reinicia a transmissão automaticamente.
 | Tipo | Sentido | Payload |
 |---|---|---|
 | 1 `HELLO` | tablet → Mac | JSON: `width`, `height`, `densityDpi`, `refreshRate`, `codecs`, `name`, `udp`, `version`, `mode` (`extend`/`main`/`mirror`/`only`), `position` (`auto`/`left`/`right`/`above`/`below`), `clipboard`, `audio` e, opcional, `streamOverride` {`codec`, `fps`, `frameCap`} (benchmark) |
-| 2 `CONFIG` | Mac → tablet | JSON: `codec`, `width`, `height`, `fps`, `token`, `udpPort`, `mode`, `server`, `version`, `audio`, `lowLatency`, `frameCap`. Um novo `CONFIG` no meio da sessão indica nova resolução |
+| 2 `CONFIG` | Mac → tablet | JSON: `codec`, `width`, `height`, `fps`, `token`, `udpPort`, `mode`, `server`, `version`, `audio`, `lowLatency`, `frameCap`, `favorite` (o tablet guarda o endereço do Mac). Um novo `CONFIG` no meio da sessão indica nova resolução |
 | 3 `VIDEO` | Mac → tablet | `pts u64` · `flags u8` (1 = keyframe) · `encodeMicros u32` · access unit Annex‑B |
 | 4 `TOUCH` | tablet → Mac | `action u8` (0 down, 1 move, 2 up, 3 hover, 4/5 caneta entra/sai do alcance) · `x f32` · `y f32` · `pressure f32` · `button u8` · `tiltX f32` · `tiltY f32` · `tool u8` (0 dedo/mouse, 1 caneta, 2 borracha) |
 | 5 `SCROLL` | tablet → Mac | `dx f32` · `dy f32` · `x f32` · `y f32` |
