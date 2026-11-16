@@ -20,6 +20,16 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  # Or run it by hand (Actions › Release › Run workflow) on a branch or commit:
+  # the release and its tag are created on the commit that was built.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to create, e.g. v0.7.0 (must match versionName)"
+        required: true
+
+env:
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
 
 permissions:
   contents: write
@@ -32,8 +42,8 @@ jobs:
       - name: Tag matches the app version
         run: |
           name="$(sed -n 's/^ *versionName = "\(.*\)".*/\1/p' android/app/build.gradle.kts)"
-          if [ "v$name" != "$GITHUB_REF_NAME" ]; then
-            echo "::error::Tag $GITHUB_REF_NAME but versionName is $name"
+          if [ "v$name" != "$RELEASE_TAG" ]; then
+            echo "::error::Tag $RELEASE_TAG but versionName is $name"
             exit 1
           fi
       - uses: actions/setup-java@v4
@@ -139,8 +149,16 @@ jobs:
       - name: Zip
         working-directory: mac/build
         run: ditto -c -k --keepParent Screeaner.app "$GITHUB_WORKSPACE/Screeaner-mac.zip"
+      - name: Release notes
+        run: |
+          notes="docs/release-notes/$RELEASE_TAG.md"
+          if [ -f "$notes" ]; then cp "$notes" release-notes.md; else : > release-notes.md; fi
       - uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: Screeaner ${{ env.RELEASE_TAG }}
+          target_commitish: ${{ github.sha }}
+          body_path: release-notes.md
           files: |
             Screeaner.apk
             Screeaner-mac.zip
