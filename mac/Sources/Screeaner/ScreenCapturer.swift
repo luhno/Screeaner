@@ -44,6 +44,10 @@ final class ScreenCapturer: NSObject, SCStreamOutput, SCStreamDelegate {
         // Size of the surface pool, not a latency buffer. We keep one frame
         // around for keyframe re-sends and the encoder may hold another.
         config.queueDepth = 5
+        // Mirroring a screen with another shape: letterbox instead of stretching.
+        if #available(macOS 14.0, *) {
+            config.preservesAspectRatio = true
+        }
 
         let filter = SCContentFilter(display: target, excludingWindows: [])
         let stream = SCStream(filter: filter, configuration: config, delegate: self)

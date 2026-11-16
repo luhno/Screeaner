@@ -12,7 +12,7 @@ enum Proto {
     /// First four bytes ("SCRN") of the datagram the tablet sends to open the UDP path.
     static let udpMagic: UInt32 = 0x5343_524E
     /// Shown in the menu and sent to the tablet (which logs it in test sessions).
-    static let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.2.0"
+    static let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.3.0"
 }
 
 enum MsgType: UInt8 {
@@ -42,6 +42,10 @@ struct Hello: Decodable {
     let udp: Bool?
     /// Tablet app version, for display.
     let version: String?
+    /// "extend", "main" or "mirror" (see DisplayMode). Missing means extend.
+    let mode: String?
+    /// "auto", "left", "right", "above" or "below" (see DisplayPosition).
+    let position: String?
 }
 
 struct StreamConfig: Encodable {
@@ -52,6 +56,8 @@ struct StreamConfig: Encodable {
     /// Non-zero when the Mac accepts UDP video: the tablet echoes it in its UDP hello.
     let token: UInt32
     let udpPort: Int
+    /// The display mode actually in use.
+    let mode: String
     /// This Mac's name and app version.
     let server: String
     let version: String

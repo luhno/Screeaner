@@ -7,6 +7,20 @@
     <string name="help">Abra o Screeaner no Mac.\n\nUSB (menor latência): ative a Depuração USB e conecte o cabo.\nWi‑Fi: mantenha Mac e tablet na mesma rede.\n\nDois dedos: rolar · Pinça: zoom · Toque com dois dedos: clique direito\nToque com três dedos: monitor de latência e desempenho · Gire o tablet para usar em retrato\nTeclado e mouse ligados ao tablet controlam o Mac</string>
     <string name="host_hint">IP do Mac (opcional)</string>
     <string name="connect">Conectar</string>
+    <string name="display_header">EXIBIÇÃO NO MAC</string>
+    <string name="display_hint">Extensão: mais área de trabalho · Monitor principal: barra de menus e Dock vão para o tablet · Espelhar: o tablet mostra a tela do Mac</string>
+    <string-array name="display_modes">
+        <item>Extensão</item>
+        <item>Monitor principal</item>
+        <item>Espelhar o Mac</item>
+    </string-array>
+    <string-array name="display_positions">
+        <item>Posição do macOS</item>
+        <item>À esquerda do Mac</item>
+        <item>À direita do Mac</item>
+        <item>Acima do Mac</item>
+        <item>Abaixo do Mac</item>
+    </string-array>
     <string name="monitor_latency">LATÊNCIA</string>
     <string name="monitor_performance">DESEMPENHO</string>
     <string name="record_start">● Gravar sessão de teste</string>

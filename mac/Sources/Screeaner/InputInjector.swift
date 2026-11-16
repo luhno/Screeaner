@@ -14,8 +14,13 @@ final class InputInjector {
     private var modifiers: CGEventFlags = []
     private var heldModifierKeys = Set<CGKeyCode>()
 
-    init(displayID: CGDirectDisplayID) {
+    /// Part of the tablet screen (normalized) that shows the display; smaller
+    /// than the whole screen when a mirrored Mac screen is letterboxed.
+    private let area: CGRect
+
+    init(displayID: CGDirectDisplayID, area: CGRect = DisplayArranger.unitArea) {
         self.displayID = displayID
+        self.area = area.width > 0 && area.height > 0 ? area : DisplayArranger.unitArea
     }
 
     static var hasPermission: Bool { AXIsProcessTrusted() }
@@ -27,8 +32,8 @@ final class InputInjector {
 
     private func point(_ x: Float, _ y: Float) -> CGPoint {
         let bounds = CGDisplayBounds(displayID)
-        let cx = CGFloat(min(max(x, 0), 1))
-        let cy = CGFloat(min(max(y, 0), 1))
+        let cx = min(max((CGFloat(x) - area.minX) / area.width, 0), 1)
+        let cy = min(max((CGFloat(y) - area.minY) / area.height, 0), 1)
         return CGPoint(
             x: bounds.origin.x + cx * (bounds.width - 1),
             y: bounds.origin.y + cy * (bounds.height - 1)
@@ -83,8 +88,8 @@ final class InputInjector {
         let bounds = CGDisplayBounds(displayID)
         // Scroll events go to whatever is under the cursor.
         moveCursor(to: point(x, y))
-        let vertical = Int32((CGFloat(dy) * bounds.height).rounded())
-        let horizontal = Int32((CGFloat(dx) * bounds.width).rounded())
+        let vertical = Int32((CGFloat(dy) / area.height * bounds.height).rounded())
+        let horizontal = Int32((CGFloat(dx) / area.width * bounds.width).rounded())
         guard vertical != 0 || horizontal != 0 else { return }
         guard let event = CGEvent(
             scrollWheelEvent2Source: source, units: .pixel, wheelCount: 2,

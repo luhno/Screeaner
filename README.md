@@ -63,6 +63,16 @@ Cada push também gera o APK e o `.app` como artefatos do GitHub Actions (workfl
 
 **Teclado e mouse do tablet** — um teclado físico (USB ou Bluetooth) ligado ao tablet digita no Mac enquanto a transmissão está ativa, incluindo modificadores (a tecla Meta/Windows vira ⌘) e atalhos. Um mouse ou trackpad ligado ao tablet também controla o cursor, com botão direito e rolagem. Atalhos que o próprio Android intercepta (por exemplo Meta+Tab) não chegam ao Mac.
 
+**Modo de exibição** — escolhido no tablet, na tela de conexão ou no painel do monitor (três dedos). Trocar o modo reconecta em cerca de um segundo.
+
+| Modo | O que acontece no Mac |
+|---|---|
+| **Extensão** (padrão) | O tablet vira mais uma área de trabalho. A posição pode ficar como o macOS lembra ou ser fixada à esquerda, à direita, acima ou abaixo da tela do Mac. |
+| **Monitor principal** | Igual à extensão, mas o tablet passa a ser o display principal: a barra de menus, o Dock e as janelas novas vão para ele. A posição relativa à tela do Mac é mantida. |
+| **Espelhar o Mac** | O tablet mostra a própria tela do Mac, com faixas pretas se o formato for diferente; o toque controla a tela do Mac. Nenhum display virtual é criado. |
+
+As mudanças de arranjo valem só enquanto o app do Mac está aberto: ao sair, o macOS volta ao arranjo dele. Com vários tablets, o último a pedir "Monitor principal" fica com a barra de menus.
+
 **Vários tablets** — basta abrir o app em cada um: cada tablet ganha o próprio display virtual, e o macOS lembra a posição de cada um separadamente.
 
 ## De onde vem a baixa latência
@@ -97,7 +107,7 @@ No painel completo, **● Gravar sessão de teste** grava uma linha por segundo 
 
 ### Versão do app
 
-A versão aparece no rodapé da tela de conexão e no título do painel do tablet (`Screeaner v0.2.0 (2) · Android … · modelo`), e no rodapé do menu do Mac. Cada lado também mostra a versão do outro: o menu do Mac lista a versão do app de cada tablet, e as sessões gravadas registram a versão do Mac.
+A versão aparece no rodapé da tela de conexão e no título do painel do tablet (`Screeaner v0.3.0 (3) · Android … · modelo`), e no rodapé do menu do Mac. Cada lado também mostra a versão do outro: o menu do Mac lista a versão do app de cada tablet, e as sessões gravadas registram a versão do Mac.
 
 ## Ajustes (menu do Mac)
 
@@ -116,8 +126,8 @@ Mudar um ajuste reinicia a transmissão automaticamente.
 
 | Tipo | Sentido | Payload |
 |---|---|---|
-| 1 `HELLO` | tablet → Mac | JSON: `width`, `height`, `densityDpi`, `refreshRate`, `codecs`, `name`, `id`, `udp`, `version` |
-| 2 `CONFIG` | Mac → tablet | JSON: `codec`, `width`, `height`, `fps`, `token`, `udpPort`, `server`, `version` |
+| 1 `HELLO` | tablet → Mac | JSON: `width`, `height`, `densityDpi`, `refreshRate`, `codecs`, `name`, `id`, `udp`, `version`, `mode` (`extend`/`main`/`mirror`), `position` (`auto`/`left`/`right`/`above`/`below`) |
+| 2 `CONFIG` | Mac → tablet | JSON: `codec`, `width`, `height`, `fps`, `token`, `udpPort`, `mode`, `server`, `version` |
 | 3 `VIDEO` | Mac → tablet | `pts u64` · `flags u8` (1 = keyframe) · `encodeMicros u32` · access unit Annex‑B |
 | 4 `TOUCH` | tablet → Mac | `action u8` (0 down, 1 move, 2 up, 3 hover) · `x f32` · `y f32` · `pressure f32` · `button u8` |
 | 5 `SCROLL` | tablet → Mac | `dx f32` · `dy f32` · `x f32` · `y f32` |
@@ -146,6 +156,7 @@ android/  App Kotlin sem dependências externas: descoberta, decoder, FEC, toque
 ## Limitações conhecidas
 
 - `CGVirtualDisplay` é uma API privada do CoreGraphics (a mesma usada por apps como BetterDisplay): funciona fora da Mac App Store e pode mudar entre versões do macOS.
+- No modo espelhar, o enquadramento com faixas pretas depende do ScreenCaptureKit preservar a proporção; isso é garantido a partir do macOS 14.
 - O zoom por pinça usa um evento de gesto não documentado do macOS; pode não funcionar em todos os apps.
 - O teclado é mapeado por posição física (layout ANSI); teclas extras de layouts como ABNT2 ainda não são enviadas.
 - Girar o tablet reinicia a transmissão (cerca de um segundo), e o macOS reposiciona as janelas daquele display.

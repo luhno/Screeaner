@@ -3,6 +3,7 @@ package app.screeaner
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
+import android.content.SharedPreferences
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -18,8 +19,11 @@ import android.view.WindowInsets
 import android.view.WindowInsetsController
 import android.view.WindowManager
 import android.view.inputmethod.InputMethodManager
+import android.widget.AdapterView
+import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.EditText
+import android.widget.Spinner
 import android.widget.TextView
 import java.util.Locale
 import java.util.UUID
@@ -50,6 +54,10 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
     private lateinit var deviceMonitor: DeviceMonitor
     private lateinit var recorder: SessionRecorder
     private var appVersion = "?"
+    private var displayMode = MODE_VALUES[0]
+    private var displayPosition = POSITION_VALUES[0]
+    private val modeSpinners = ArrayList<Spinner>()
+    private val positionSpinners = ArrayList<Spinner>()
     @Volatile private var manualHost: String? = null
     private var deviceId = ""
     private var streaming = false
@@ -78,6 +86,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
             prefs.edit().putString(PREF_DEVICE_ID, it).apply()
         }
         hostInput.setText(manualHost ?: "")
+        setUpDisplayOptions(prefs)
         findViewById<Button>(R.id.connect).setOnClickListener {
             manualHost = hostInput.text.toString().trim()
             prefs.edit().putString(PREF_HOST, manualHost).apply()
@@ -126,6 +135,59 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
         }
         return super.dispatchKeyEvent(event)
     }
+
+    // region Display mode (extension / main display / mirror)
+
+    private fun setUpDisplayOptions(prefs: SharedPreferences) {
+        displayMode = prefs.getString(PREF_MODE, null)?.takeIf { it in MODE_VALUES } ?: MODE_VALUES[0]
+        displayPosition = prefs.getString(PREF_POSITION, null)?.takeIf { it in POSITION_VALUES } ?: POSITION_VALUES[0]
+        modeSpinners += listOf(findViewById<Spinner>(R.id.modeSpinner), findViewById(R.id.monitorModeSpinner))
+        positionSpinners += listOf(findViewById<Spinner>(R.id.positionSpinner), findViewById(R.id.monitorPositionSpinner))
+
+        fun attach(spinner: Spinner, items: Int, onPick: (Int) -> Unit) {
+            spinner.adapter = ArrayAdapter.createFromResource(this, items, android.R.layout.simple_spinner_item).apply {
+                setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+            }
+            spinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+                override fun onItemSelected(parent: AdapterView<*>, view: View?, index: Int, id: Long) = onPick(index)
+                override fun onNothingSelected(parent: AdapterView<*>) {}
+            }
+        }
+        modeSpinners.forEach { spinner ->
+            attach(spinner, R.array.display_modes) { changeDisplay(MODE_VALUES[it], displayPosition, prefs) }
+        }
+        positionSpinners.forEach { spinner ->
+            attach(spinner, R.array.display_positions) { changeDisplay(displayMode, POSITION_VALUES[it], prefs) }
+        }
+        syncDisplaySpinners()
+    }
+
+    private fun syncDisplaySpinners() {
+        modeSpinners.forEach { it.setSelection(MODE_VALUES.indexOf(displayMode)) }
+        positionSpinners.forEach {
+            it.setSelection(POSITION_VALUES.indexOf(displayPosition))
+            it.isEnabled = displayMode != "mirror" // a mirror has no position
+            it.alpha = if (it.isEnabled) 1f else 0.4f
+        }
+    }
+
+    /** Saves the choice and, if connected, reconnects so the Mac applies it. */
+    private fun changeDisplay(mode: String, position: String, prefs: SharedPreferences) {
+        // Spinners also report the selection we set ourselves: ignore no-ops.
+        if (mode == displayMode && position == displayPosition) return
+        displayMode = mode
+        displayPosition = position
+        prefs.edit().putString(PREF_MODE, mode).putString(PREF_POSITION, position).apply()
+        syncDisplaySpinners()
+        if (client != null) {
+            handler.removeCallbacks(restartClient)
+            client?.stop()
+            client = null
+            restartClient.run()
+        }
+    }
+
+    // endregion
 
     // region Monitor, test sessions and version
 
@@ -177,6 +239,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
         val setup = listOf(
             "tablet: ${Build.MANUFACTURER} ${Build.MODEL} · Android ${Build.VERSION.RELEASE} · app $appVersion",
             "mac: ${info?.macName ?: "?"} · app ${info?.macVersion ?: "?"}",
+            "exibição: ${info?.mode ?: displayMode} · posição $displayPosition",
             "stream: ${info?.width}x${info?.height} · ${info?.codec} · ${info?.fps} fps · painel ${refreshRate.roundToInt()} Hz",
         )
         if (recorder.start(setup)) {
@@ -343,6 +406,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
             deviceName = Build.MODEL ?: "Android",
             deviceId = deviceId,
             appVersion = appVersion,
+            displayMode = displayMode,
+            displayPosition = displayPosition,
             discovery = discovery,
             manualHost = { manualHost },
             listener = this,
@@ -567,6 +632,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
 
     private companion object {
         const val PREF_HOST = "host"
+        const val PREF_MODE = "displayMode"
+        const val PREF_POSITION = "displayPosition"
+        /** Wire values, in the same order as R.array.display_modes / display_positions. */
+        val MODE_VALUES = listOf("extend", "main", "mirror")
+        val POSITION_VALUES = listOf("auto", "left", "right", "above", "below")
         const val HUD_OFF = 0
         const val HUD_COMPACT = 1
         const val HUD_FULL = 2

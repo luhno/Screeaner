@@ -1,3 +1,4 @@
+import CoreGraphics
 import CoreMedia
 import CoreVideo
 import Foundation
@@ -46,6 +47,7 @@ final class StreamSession {
 
     private let captureQueue = DispatchQueue(label: "screeaner.capture", qos: .userInteractive)
     private var display: VirtualDisplay?
+    private var began = false
     private var capturer: ScreenCapturer?
     private var injector: InputInjector?
     private var controller: BitrateController?   // main queue
@@ -208,7 +210,8 @@ final class StreamSession {
     // MARK: - Pipeline setup (main queue)
 
     private func begin(_ hello: Hello) {
-        guard display == nil, !isStopped else { return }
+        guard !began, !isStopped else { return }
+        began = true
         let defaults = UserDefaults.standard
         let hiDPI = defaults.bool(forKey: SettingsKey.hiDPI)
         // Portrait tablets simply report width < height.
@@ -226,16 +229,27 @@ final class StreamSession {
         deviceID = hello.id
         onHello?() // lets the app retire a stale session of the same tablet first
 
-        guard let display = VirtualDisplay(
-            name: "Screeaner – \(hello.name)",
-            serial: VirtualDisplay.serial(for: hello.id ?? hello.name),
-            pixelWidth: width, pixelHeight: height,
-            hiDPI: hiDPI, refreshRate: Double(fps), dpi: hello.densityDpi
-        ) else {
-            fail("Não foi possível criar o display virtual")
-            return
+        let mode = DisplayMode(rawValue: hello.mode ?? "") ?? .extend
+        let position = DisplayPosition(rawValue: hello.position ?? "") ?? .auto
+        let captureID: CGDirectDisplayID
+        var touchArea = DisplayArranger.unitArea
+        if mode == .mirror {
+            // Show the Mac's own screen: nothing to create, just capture it.
+            captureID = DisplayArranger.macScreen()
+            touchArea = DisplayArranger.fittedArea(of: captureID, width: width, height: height)
+        } else {
+            guard let display = VirtualDisplay(
+                name: "Screeaner – \(hello.name)",
+                serial: VirtualDisplay.serial(for: hello.id ?? hello.name),
+                pixelWidth: width, pixelHeight: height,
+                hiDPI: hiDPI, refreshRate: Double(fps), dpi: hello.densityDpi
+            ) else {
+                fail("Não foi possível criar o display virtual")
+                return
+            }
+            self.display = display
+            captureID = display.displayID
         }
-        self.display = display
 
         let encoder: VideoEncoder
         do {
@@ -247,11 +261,11 @@ final class StreamSession {
         encoder.onEncoded = { [weak self] data, isKey, pts, encodeMicros in
             self?.transmit(data, isKey: isKey, ptsMicros: pts, encodeMicros: encodeMicros)
         }
-        injector = InputInjector(displayID: display.displayID)
+        injector = InputInjector(displayID: captureID, area: touchArea)
 
         let config = StreamConfig(
             codec: codec.rawValue, width: width, height: height, fps: fps,
-            token: useUdp ? token : 0, udpPort: Int(Proto.port),
+            token: useUdp ? token : 0, udpPort: Int(Proto.port), mode: mode.rawValue,
             server: Host.current().localizedName ?? "Mac", version: Proto.appVersion
         )
         if let json = try? JSONEncoder().encode(config) {
@@ -266,7 +280,7 @@ final class StreamSession {
         self.capturer = capturer
         let orientation = width >= height ? "" : " · retrato"
         let tabletApp = hello.version.map { " · app \($0)" } ?? ""
-        summary = "\(width)×\(height) · \(fps) Hz · \(codec == .hevc ? "HEVC" : "H.264")\(orientation)\(tabletApp)"
+        summary = "\(width)×\(height) · \(fps) Hz · \(codec == .hevc ? "HEVC" : "H.264")\(orientation)\(tabletApp)\n\(mode.label(position))"
         onStatus?("Iniciando captura…")
 
         captureQueue.async {
@@ -274,11 +288,18 @@ final class StreamSession {
             self.startRefineTimer()
         }
 
-        let displayID = display.displayID
+        let displayID = captureID
         Task {
             do {
                 try await capturer.start(displayID: displayID, width: width, height: height, fps: fps)
-                DispatchQueue.main.async { self.onStatus?("Transmitindo") }
+                DispatchQueue.main.async {
+                    // The display surely exists now that capture found it.
+                    if mode != .mirror, !self.isStopped,
+                       !DisplayArranger.arrange(displayID, position: position, makeMain: mode == .main) {
+                        self.onStatus?("O macOS não aceitou reposicionar o display do tablet")
+                    }
+                    self.onStatus?("Transmitindo")
+                }
             } catch {
                 DispatchQueue.main.async {
                     self.fail("Captura falhou (verifique a permissão de Gravação de Tela): \(error.localizedDescription)")

@@ -5,6 +5,8 @@ import Foundation
 /// A virtual monitor sized to match the tablet panel. It lives exactly as long
 /// as this object: releasing it unplugs the display.
 final class VirtualDisplay {
+    /// Marks our displays so they can be told apart from real monitors.
+    static let vendorID: UInt32 = 0x5343
     private let display: CGVirtualDisplay
     var displayID: CGDirectDisplayID { display.displayID }
 
@@ -22,7 +24,7 @@ final class VirtualDisplay {
             width: Double(pixelWidth) / safeDpi * 25.4,
             height: Double(pixelHeight) / safeDpi * 25.4
         )
-        descriptor.vendorID = 0x5343
+        descriptor.vendorID = Self.vendorID
         descriptor.productID = 0x524E
         descriptor.serialNum = serial
 

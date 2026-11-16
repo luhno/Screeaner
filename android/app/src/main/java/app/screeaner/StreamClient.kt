@@ -38,6 +38,8 @@ class StreamClient(
     private val deviceName: String,
     private val deviceId: String,
     private val appVersion: String,
+    private val displayMode: String,
+    private val displayPosition: String,
     private val discovery: Discovery,
     private val manualHost: () -> String?,
     private val listener: Listener,
@@ -222,6 +224,7 @@ class StreamClient(
                             fps = json.optInt("fps", 60),
                             macName = json.optString("server", "Mac"),
                             macVersion = json.optString("version", "?"),
+                            mode = json.optString("mode", "extend"),
                         )
                         streamInfo = info
                         decoder = VideoDecoder(info.codec, info.width, info.height, info.fps, surface).also {
@@ -434,6 +437,8 @@ class StreamClient(
         .put("id", deviceId)
         .put("udp", wantsUdp)
         .put("version", appVersion)
+        .put("mode", displayMode)
+        .put("position", displayPosition)
         .toString()
 
     private fun pause(millis: Long) {
