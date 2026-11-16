@@ -18,12 +18,12 @@ data class StreamInfo(
     val fps: Int,
     val macName: String,
     val macVersion: String,
-    /** Display mode the Mac actually applied: extend, main, mirror or only. */
-    val mode: String = "extend",
     /** True when the Mac's encoder runs in low-latency rate control; null if the Mac app is too old to say. */
     val lowLatencyEncoder: Boolean? = null,
     /** True when each encoded frame is capped in size; null if unknown. */
     val frameCap: Boolean? = null,
+    /** Display mode the Mac actually applied: extend, main, mirror or only. */
+    val mode: String = "extend",
 ) {
     /** "H.264 · 60 fps · encoder baixa latência · limite por quadro" */
     fun describe(): String {
