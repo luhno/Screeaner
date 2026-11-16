@@ -54,7 +54,6 @@
     <string name="pairing_cancel">Cancelar</string>
     <string name="pairing_compare">Confira se o Mac “%1$s” mostra este mesmo código.</string>
     <string name="pairing_waiting">Aprove no Mac “%1$s”, que mostra este mesmo código.</string>
-    <string name="pairing_denied">Conexão recusada: %1$s</string>
     <string name="options">Opções</string>
     <string name="options_title">Opções do Screeaner</string>
     <string-array name="option_labels">
@@ -106,5 +105,34 @@
     <string name="label_pairing">Pareamento</string>
     <string name="label_pairing_code">Código de pareamento</string>
     <string name="option_display">Exibição</string>
-    <string name="options_more">Opções · exibição, áudio, caneta, atalhos</string>
+    <string name="options_more">Opções · áudio, caneta, atalhos, teclado</string>
+    <string name="monitor_close">Fechar o painel</string>
+    <string name="monitor_title">02 / Monitor · v%1$s · %2$s</string>
+    <string name="monitor_peak">ms · pico %1$s</string>
+    <string name="monitor_breakdown">ENC %1$s · REDE %2$s · TRANSF %3$s · DEC %4$s</string>
+    <string name="monitor_breakdown_wide">ENC %1$-6s REDE %2$-5s TRANSF %3$-5s DEC %4$s</string>
+    <string name="monitor_perf_headers">FPS|MBPS|PERDA|CPU|MEM|BATERIA</string>
+    <string name="monitor_perf_footer">%1$s · %2$s · quadros perdidos %3$d · keyframes %4$d</string>
+    <string name="hud_loss">perda %1$s%%</string>
+    <string name="a11y_display_mode">Modo de exibição no Mac</string>
+    <string name="a11y_display_position">Posição em relação à tela do Mac</string>
+    <string name="denied_by_mac">O Mac recusou a conexão: %1$s</string>
+    <string name="denied_by_mac_generic">O Mac recusou a conexão.</string>
+    <string name="denied_mac_too_old">O app do Mac não respondeu ao pareamento. Atualize o Screeaner no Mac para a versão %1$s.</string>
+    <string name="denied_cancelled">Pareamento cancelado no tablet.</string>
+    <string name="connecting_to">Conectando · %1$s</string>
+    <string name="back_again">Toque em Voltar de novo para encerrar a transmissão</string>
+    <string name="update_available_toast">Atualização v%1$s disponível: abra o painel (três dedos) para instalar</string>
+    <string name="update_button">Atualizar para v%1$s</string>
+    <string name="record_no_stream">sem transmissão ativa</string>
+    <string-array name="thermal_states">
+        <item>normal</item>
+        <item>leve</item>
+        <item>moderado</item>
+        <item>severo</item>
+        <item>crítico</item>
+        <item>emergência</item>
+        <item>desligando</item>
+        <item>n/d</item>
+    </string-array>
 </resources>

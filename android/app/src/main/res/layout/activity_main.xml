@@ -53,11 +53,23 @@
             android:gravity="center_vertical"
             android:orientation="horizontal">
 
-            <LinearLayout
+            <!-- Scrolls on short screens, while pairing and when the keyboard is up;
+                 fillViewport + center_vertical keeps it centred when it fits. -->
+            <ScrollView
+                android:id="@+id/overlayScroll"
                 android:layout_width="0dp"
-                android:layout_height="wrap_content"
+                android:layout_height="match_parent"
                 android:layout_weight="1"
-                android:orientation="vertical">
+                android:fillViewport="true"
+                android:scrollbars="none">
+
+            <LinearLayout
+                android:id="@+id/overlayColumn"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="vertical"
+                android:paddingVertical="8dp">
 
                 <TextView
                     android:id="@+id/statusLabel"
@@ -73,12 +85,32 @@
                 <TextView
                     android:id="@+id/status"
                     style="@style/Text.Display"
-                    android:layout_width="wrap_content"
+                    android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="14dp"
+                    android:autoSizeMaxTextSize="56sp"
+                    android:autoSizeMinTextSize="28sp"
+                    android:autoSizeTextType="uniform"
+                    android:ellipsize="end"
                     android:lineSpacingMultiplier="0.95"
+                    android:maxLines="3"
                     android:text="@string/status_searching"
                     android:textSize="56sp" />
+
+                <!-- Refusals and other messages: readable size, not the display font. -->
+                <TextView
+                    android:id="@+id/notice"
+                    style="@style/Text.Body"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="14dp"
+                    android:background="@drawable/bg_alert"
+                    android:drawableStart="@drawable/dot_signal"
+                    android:drawablePadding="10dp"
+                    android:paddingHorizontal="14dp"
+                    android:paddingVertical="12dp"
+                    android:textSize="14sp"
+                    android:visibility="gone" />
 
                 <TextView
                     style="@style/Text.Secondary"
@@ -222,16 +254,19 @@
                         android:layout_width="88dp"
                         android:layout_height="wrap_content"
                         android:fontFamily="@font/space_grotesk_medium"
+                        android:labelFor="@id/modeSpinner"
                         android:text="@string/option_display" />
 
                     <Spinner
                         android:id="@+id/modeSpinner"
+                    android:contentDescription="@string/a11y_display_mode"
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
                         android:layout_weight="1" />
 
                     <Spinner
                         android:id="@+id/positionSpinner"
+                    android:contentDescription="@string/a11y_display_position"
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
                         android:layout_weight="1" />
@@ -293,6 +328,7 @@
                         android:text="@string/options" />
                 </LinearLayout>
             </LinearLayout>
+            </ScrollView>
 
             <app.screeaner.RadarView
                 android:id="@+id/radar"
@@ -329,12 +365,40 @@
             android:orientation="vertical"
             android:padding="24dp">
 
-            <TextView
-                android:id="@+id/monitorTitle"
-                style="@style/Text.Label"
+            <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:maxLines="2" />
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:id="@+id/monitorTitle"
+                    style="@style/Text.Label"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:maxLines="2" />
+
+                <Button
+                    android:id="@+id/monitorClose"
+                    style="@style/Button.Outline"
+                    android:layout_width="48dp"
+                    android:layout_height="48dp"
+                    android:layout_marginStart="8dp"
+                    android:contentDescription="@string/monitor_close"
+                    android:paddingHorizontal="0dp"
+                    android:text="×"
+                    android:textSize="20sp"
+                    tools:ignore="HardcodedText" />
+            </LinearLayout>
+
+            <Button
+                android:id="@+id/updateButton"
+                style="@style/Button.Primary"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:layout_marginTop="12dp"
+                android:visibility="gone" />
 
             <LinearLayout
                 android:layout_width="match_parent"
@@ -344,12 +408,14 @@
 
                 <Spinner
                     android:id="@+id/monitorModeSpinner"
+                    android:contentDescription="@string/a11y_display_mode"
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_weight="1" />
 
                 <Spinner
                     android:id="@+id/monitorPositionSpinner"
+                    android:contentDescription="@string/a11y_display_position"
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_weight="1" />

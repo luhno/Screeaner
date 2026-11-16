@@ -10,11 +10,12 @@ struct PairedTablet: Identifiable, Equatable {
 }
 
 /// This Mac's long-term identity key and the list of approved tablets.
-/// All access happens on the main queue except `identity`, which is immutable.
+/// Used from the main queue and the connection queues, so the list is guarded by a lock.
 final class PairingStore {
     static let shared = PairingStore()
 
     private let defaultsKey = "pairedTablets"
+    private let lock = NSLock()
     let identity: P256.KeyAgreement.PrivateKey
 
     private init() {
@@ -41,6 +42,12 @@ final class PairingStore {
     }
 
     var tablets: [PairedTablet] {
+        lock.lock()
+        defer { lock.unlock() }
+        return readTablets()
+    }
+
+    private func readTablets() -> [PairedTablet] {
         guard let raw = UserDefaults.standard.dictionary(forKey: defaultsKey) as? [String: [String: Any]] else {
             return []
         }
@@ -56,10 +63,14 @@ final class PairingStore {
     }
 
     func isPaired(deviceId: String, publicKey: Data) -> Bool {
-        tablets.contains { $0.id == deviceId && $0.publicKey == publicKey }
+        lock.lock()
+        defer { lock.unlock() }
+        return readTablets().contains { $0.id == deviceId && $0.publicKey == publicKey }
     }
 
     func add(deviceId: String, name: String, publicKey: Data) {
+        lock.lock()
+        defer { lock.unlock() }
         var raw = UserDefaults.standard.dictionary(forKey: defaultsKey) ?? [:]
         raw[deviceId] = [
             "name": name,
@@ -70,6 +81,8 @@ final class PairingStore {
     }
 
     func remove(deviceId: String) {
+        lock.lock()
+        defer { lock.unlock() }
         var raw = UserDefaults.standard.dictionary(forKey: defaultsKey) ?? [:]
         raw.removeValue(forKey: deviceId)
         UserDefaults.standard.set(raw, forKey: defaultsKey)

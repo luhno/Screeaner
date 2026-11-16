@@ -1,6 +1,5 @@
 package app.screeaner
 
-import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.view.Gravity
 import android.view.KeyEvent
@@ -16,6 +15,9 @@ class ShortcutBar(
     private val container: LinearLayout,
     private val sendKey: (action: Int, keyCode: Int) -> Unit,
 ) {
+    /** Spoken names, in the order of [ALL] (R.array.shortcut_labels). */
+    private val names: Array<String> = container.resources.getStringArray(R.array.shortcut_labels)
+
     class Action(val id: String, val label: String, val keys: IntArray, val sticky: Boolean = false)
 
     private val held = LinkedHashSet<String>()
@@ -32,8 +34,8 @@ class ShortcutBar(
                 text = action.label
                 gravity = Gravity.CENTER
                 textSize = if (action.label.length > 2) 13f else 18f
-                typeface = Typeface.DEFAULT_BOLD
-                setTextColor(0xFFFFFFFF.toInt())
+                typeface = container.resources.getFont(R.font.jetbrains_mono_medium)
+                contentDescription = names.getOrNull(ALL.indexOf(action)) ?: action.label
                 setOnClickListener { trigger(action) }
             }
             val size = (52 * density).toInt()
@@ -64,6 +66,8 @@ class ShortcutBar(
         toPress.asReversed().forEach { sendKey(UP, it) }
     }
 
+    val hasHeldKeys: Boolean get() = held.isNotEmpty()
+
     /** Lets go of every sticky modifier (e.g. when the stream stops). */
     fun releaseAll() {
         for (id in held.toList()) {
@@ -75,10 +79,15 @@ class ShortcutBar(
 
     private fun paint(id: String) {
         val view = views[id] ?: return
+        val latched = id in held
+        // Screeaner Dot: ink outlines; the one signal red marks a key held down on the Mac.
         view.background = GradientDrawable().apply {
             cornerRadius = 10 * density
-            setColor(if (id in held) 0xFF4F8CFF.toInt() else 0x33FFFFFF)
+            setColor(if (latched) Dot.SIGNAL else Dot.ink(0.06f))
+            setStroke((1 * density).toInt().coerceAtLeast(1), if (latched) Dot.SIGNAL else Dot.ink(0.24f))
         }
+        view.setTextColor(Dot.INK)
+        view.isSelected = latched
     }
 
     companion object {

@@ -73,6 +73,7 @@ Cada push também gera o APK e o `.app` como artefatos do GitHub Actions (workfl
 | Toque com dois dedos | Clique direito |
 | Toque com três dedos | Alterna o monitor: linha compacta → painel completo → oculto |
 | Girar o tablet | Alterna entre paisagem e retrato **sem reconectar**: o display muda de resolução no lugar |
+| Voltar duas vezes | Encerra a transmissão (um toque só avisa, para não sair sem querer) |
 
 **Teclado e mouse do tablet** — um teclado físico (USB ou Bluetooth) ligado ao tablet digita no Mac enquanto a transmissão está ativa, incluindo modificadores (a tecla Meta/Windows vira ⌘), atalhos e o teclado numérico. Teclados **ABNT2** funcionam com o layout *Brasileiro* do Mac, incluindo ç, acentos e as teclas extras `\ |` e `/ ?`. Em teclados de PC, a opção *Ctrl do teclado funciona como ⌘* deixa Ctrl+C/Ctrl+V como no Mac. Um mouse ou trackpad ligado ao tablet também controla o cursor, com botão direito e rolagem. Atalhos que o próprio Android intercepta (por exemplo Meta+Tab) não chegam ao Mac.
 
@@ -115,7 +116,7 @@ Cada etapa foi escolhida para não acumular fila:
 
 ## Monitor de latência e desempenho (tablet)
 
-Um toque com três dedos alterna entre uma **linha compacta**, o **painel completo** e oculto. O painel mostra, atualizado a cada segundo e com gráfico do último minuto:
+Um toque com três dedos alterna entre uma **linha compacta**, o **painel completo** e oculto (o painel também tem um botão ×, e o app lembra a última escolha). O painel mostra, atualizado a cada segundo e com gráfico do último minuto:
 
 - **Latência Mac→tela** — medida quadro a quadro: do instante em que o Mac começa a codificar o quadro até o tablet entregá-lo à tela, com média e pico. O tablet alinha o relógio com o do Mac pelo ping (a cada segundo), então o número tem margem de erro de até meio ping. Não inclui a captura no Mac nem o tempo de varredura do painel.
 - **Parcelas** — `encode` (no Mac), `rede` (meia viagem do ping), `transf` (do primeiro byte ou datagrama do quadro até o quadro completo: o tempo de um quadro grande atravessar o enlace) e `decode` (da entrada no decoder até a tela, média e pico).
@@ -158,7 +159,7 @@ No painel completo, **● Gravar sessão de teste** grava uma linha por segundo 
 
 ### Versão do app
 
-A versão aparece no rodapé da tela de conexão e no título do painel do tablet (`Screeaner v0.7.0 (7) · Android … · modelo`), e no rodapé do menu do Mac. Cada lado também mostra a versão do outro: o menu do Mac lista a versão do app de cada tablet, e as sessões gravadas registram a versão do Mac.
+A versão aparece no rodapé da tela de conexão e no título do painel do tablet (`Screeaner v0.7.1 (8) · Android … · modelo`), e no rodapé do menu do Mac. Cada lado também mostra a versão do outro: o menu do Mac lista a versão do app de cada tablet, e as sessões gravadas registram a versão do Mac.
 
 ## Atualizações (sem Google Play nem App Store)
 

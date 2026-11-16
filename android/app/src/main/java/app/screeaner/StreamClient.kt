@@ -57,7 +57,7 @@ class StreamClient(
     private val trust: TrustStore,
     private val discovery: Discovery,
     private val manualHost: () -> String?,
-    private val listener: Listener,
+    private val rawListener: Listener,
     /** Per-stream settings asked of the Mac (the benchmark uses it); null = the Mac's menu settings. */
     private val override: StreamOverride? = null,
     /** Where a downloaded update is stored. */
@@ -78,12 +78,34 @@ class StreamClient(
          * approve and the code is shown for reference.
          */
         fun onPairingCode(code: String, macName: String, reply: ((Boolean) -> Unit)?)
-        fun onDenied(reason: String)
+        /** The connection was refused or cancelled; [detail] is the Mac's own words, if any. */
+        fun onDenied(reason: DenyReason, detail: String)
         fun onClipboard(text: String)
         /** The Mac carries a newer tablet app; call [requestUpdate] to get it. */
         fun onUpdateOffer(offer: UpdateOffer) {}
         /** The APK arrived and matched the offer's size and SHA-256. */
         fun onUpdateDownloaded(apk: File, offer: UpdateOffer) {}
+    }
+
+    enum class DenyReason {
+        /** The Mac refused (its user said no, or the request timed out there). */
+        MAC_REFUSED,
+        /** The Mac app predates pairing (0.6 or older). */
+        MAC_TOO_OLD,
+        /** The user cancelled the code comparison on the tablet. */
+        CANCELLED_HERE,
+    }
+
+    /** Callbacks from a client that was stopped must not reach the UI of its successor. */
+    private val listener: Listener
+        get() = if (running) rawListener else Silent
+
+    private object Silent : Listener {
+        override fun onState(state: State, detail: String) {}
+        override fun onSample(sample: StreamSample) {}
+        override fun onPairingCode(code: String, macName: String, reply: ((Boolean) -> Unit)?) {}
+        override fun onDenied(reason: DenyReason, detail: String) {}
+        override fun onClipboard(text: String) {}
     }
 
     /** What the Mac offered: its bundled tablet app. */
@@ -99,6 +121,8 @@ class StreamClient(
     @Volatile var isStreaming = false
         private set
     @Volatile private var socket: Socket? = null
+    /** The socket being connected right now, so stop() can abort the attempt. */
+    @Volatile private var attemptSocket: Socket? = null
     @Volatile private var udpSocket: DatagramSocket? = null
     @Volatile private var decoder: VideoDecoder? = null
     @Volatile private var audio: AudioPlayer? = null
@@ -127,15 +151,32 @@ class StreamClient(
 
     fun start() = thread.start()
 
-    fun stop() {
+    /**
+     * Stops the client. Returns at once unless [blocking]: closing sockets and
+     * the decoder can take a second, which must not freeze the UI. Use
+     * [blocking] only when the Surface is going away (surfaceDestroyed), since
+     * the decoder must let go of it before that callback returns.
+     */
+    fun stop(blocking: Boolean = false) {
         running = false
         closeQuietly(socket)
+        closeQuietly(attemptSocket)
         udpSocket?.close()
         thread.interrupt()
+        if (blocking) awaitStopped()
+    }
+
+    /** Waits (up to 1.5 s) for the client thread, and with it the decoder, to finish. */
+    fun awaitStopped() {
         try {
             thread.join(1500)
         } catch (_: InterruptedException) {
         }
+    }
+
+    /** "Connect" pressed: try every endpoint again right away, even ones that failed recently. */
+    fun forgetFailures() {
+        badUntil.clear()
     }
 
     // region Outgoing (called from the UI thread; never blocks)
@@ -268,6 +309,7 @@ class StreamClient(
             for (candidate in candidates()) {
                 if (!running) return
                 val attempt = Socket()
+                attemptSocket = attempt
                 try {
                     attempt.tcpNoDelay = true
                     // DSCP EF: Wi-Fi (WMM) sends touches in the voice queue, ahead of bulk traffic.
@@ -322,7 +364,7 @@ class StreamClient(
 
     // region Pairing handshake (reader thread, clear text)
 
-    private class Denied(reason: String) : Exception(reason)
+    private class Denied(val reason: DenyReason, detail: String = "") : Exception(detail)
 
     private fun readRaw(input: DataInputStream): Pair<Int, ByteArray> {
         val type = input.read()
@@ -331,7 +373,7 @@ class StreamClient(
         if (length < 0 || length > 64 * 1024) throw IOException("Bad handshake length $length")
         val payload = ByteArray(length)
         input.readFully(payload)
-        if (type == Protocol.SEC_DENIED) throw Denied(String(payload, Charsets.UTF_8))
+        if (type == Protocol.SEC_DENIED) throw Denied(DenyReason.MAC_REFUSED, String(payload, Charsets.UTF_8))
         return type to payload
     }
 
@@ -360,7 +402,7 @@ class StreamClient(
         val serverPayload = try {
             expect(input, Protocol.SEC_SERVER)
         } catch (e: SocketTimeoutException) {
-            throw Denied("o app do Mac não respondeu ao pareamento; atualize o Screeaner no Mac para a versão ${options.appVersion.substringBefore(' ')}")
+            throw Denied(DenyReason.MAC_TOO_OLD)
         }
         socket.soTimeout = 150_000
         val server = SecureChannel.Server(serverPayload)
@@ -384,7 +426,7 @@ class StreamClient(
                 accepted.set(ok)
                 decided.countDown()
             }
-            if (!decided.await(120, TimeUnit.SECONDS) || !accepted.get()) throw Denied("Pareamento cancelado no tablet")
+            if (!decided.await(120, TimeUnit.SECONDS) || !accepted.get()) throw Denied(DenyReason.CANCELLED_HERE)
         } else if (!server.knowsTablet) {
             listener.onState(State.PAIRING, server.name)
             listener.onPairingCode(session.sas, server.name, null)
@@ -414,7 +456,7 @@ class StreamClient(
         val session = try {
             handshake(socket, input, output)
         } catch (e: Denied) {
-            listener.onDenied(e.message ?: "")
+            listener.onDenied(e.reason, e.message ?: "")
             return Outcome.DENIED
         }
         secure = session

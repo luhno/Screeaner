@@ -22,8 +22,9 @@ final class PairingPanel {
             panel.center()
             self.panel = panel
         }
-        NSApp.activate(ignoringOtherApps: true)
-        panel?.makeKeyAndOrderFront(nil)
+        // Shown on top without taking the keyboard: a Return typed in another
+        // app must never answer a pairing request.
+        panel?.orderFrontRegardless()
     }
 
     func hide() {
@@ -76,9 +77,9 @@ struct PairingRequestView: View {
             HStack {
                 Button("Recusar") { decide(false) }.buttonStyle(DotButtonStyle())
                 Spacer()
+                // Deliberately no default (Return) shortcut: allowing must be a click.
                 Button("Permitir") { decide(true) }
                     .buttonStyle(DotButtonStyle(primary: true))
-                    .keyboardShortcut(.defaultAction)
             }
         }
     }

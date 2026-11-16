@@ -4,7 +4,8 @@ import Foundation
 /// 127.0.0.1 — the lowest-latency, lowest-jitter link available.
 final class AdbBridge {
     private let queue = DispatchQueue(label: "screeaner.adb", qos: .utility)
-    private var busy = false
+    /// Main queue only: a refresh is queued or running, so the 3 s tick does not pile more up.
+    private var refreshing = false
     /// Devices we already opened the app on (adb queue only).
     private var launched = Set<String>()
 
@@ -25,11 +26,9 @@ final class AdbBridge {
             completion(0)
             return
         }
+        guard !refreshing else { return }
+        refreshing = true
         queue.async {
-            guard !self.busy else { return }
-            self.busy = true
-            defer { self.busy = false }
-
             let listing = Self.run(adb, ["devices"]) ?? ""
             let serials = listing.split(separator: "\n").dropFirst().compactMap { line -> String? in
                 let parts = line.split(separator: "\t")
@@ -45,7 +44,10 @@ final class AdbBridge {
             }
             // Forget unplugged devices so they open again next time.
             self.launched = Set(serials)
-            DispatchQueue.main.async { completion(ready) }
+            DispatchQueue.main.async {
+                self.refreshing = false
+                completion(ready)
+            }
         }
     }
 
@@ -72,7 +74,8 @@ final class AdbBridge {
                 return
             }
             // -r keeps the app's data; adb fails if the signature does not match.
-            let installed = (Self.run(adb, ["-s", serial, "install", "-r", apk.path]) ?? "").contains("Success")
+            let installed = (Self.run(adb, ["-s", serial, "install", "-r", apk.path], timeout: 180) ?? "")
+                .contains("Success")
             if installed {
                 _ = Self.run(adb, ["-s", serial, "shell", "am", "start", "-n", "app.screeaner/.MainActivity"])
                 // The reinstall drops the reverse forward; set it up again.
@@ -83,8 +86,9 @@ final class AdbBridge {
         }
     }
 
-    /// Returns stdout on success, nil on failure.
-    private static func run(_ executable: String, _ arguments: [String]) -> String? {
+    /// Returns stdout on success, nil on failure. A hung adb (daemon starting,
+    /// device asleep) is killed after `timeout` seconds instead of blocking the queue.
+    private static func run(_ executable: String, _ arguments: [String], timeout: TimeInterval = 15) -> String? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
@@ -96,6 +100,9 @@ final class AdbBridge {
         } catch {
             return nil
         }
+        let watchdog = DispatchWorkItem { if process.isRunning { process.terminate() } }
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout, execute: watchdog)
+        defer { watchdog.cancel() }
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
         guard process.terminationStatus == 0 else { return nil }

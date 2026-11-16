@@ -100,15 +100,16 @@ class DeviceMonitor(private val context: Context) {
     }
 
     private fun thermalStatus(): String {
-        if (Build.VERSION.SDK_INT < 29) return "n/d"
+        val names = context.resources.getStringArray(R.array.thermal_states)
+        if (Build.VERSION.SDK_INT < 29) return names[7]
         return when (power.currentThermalStatus) {
-            PowerManager.THERMAL_STATUS_NONE -> "normal"
-            PowerManager.THERMAL_STATUS_LIGHT -> "leve"
-            PowerManager.THERMAL_STATUS_MODERATE -> "moderado"
-            PowerManager.THERMAL_STATUS_SEVERE -> "severo"
-            PowerManager.THERMAL_STATUS_CRITICAL -> "crítico"
-            PowerManager.THERMAL_STATUS_EMERGENCY -> "emergência"
-            else -> "desligando"
+            PowerManager.THERMAL_STATUS_NONE -> names[0]
+            PowerManager.THERMAL_STATUS_LIGHT -> names[1]
+            PowerManager.THERMAL_STATUS_MODERATE -> names[2]
+            PowerManager.THERMAL_STATUS_SEVERE -> names[3]
+            PowerManager.THERMAL_STATUS_CRITICAL -> names[4]
+            PowerManager.THERMAL_STATUS_EMERGENCY -> names[5]
+            else -> names[6]
         }
     }
 }

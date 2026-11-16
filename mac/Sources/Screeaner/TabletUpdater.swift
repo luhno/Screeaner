@@ -23,11 +23,19 @@ struct TabletApk {
     }()
 
     /// The APK bytes and their SHA-256 (hex), or nil if the file cannot be read.
+    /// Read and hashed once per launch: it is offered on every reconnect.
     func load() -> (data: Data, sha256: String)? {
+        Self.cacheLock.lock()
+        defer { Self.cacheLock.unlock() }
+        if let cached = Self.cache, cached.url == url { return (cached.data, cached.sha256) }
         guard let data = try? Data(contentsOf: url) else { return nil }
         let hex = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        Self.cache = (url, data, hex)
         return (data, hex)
     }
+
+    private static let cacheLock = NSLock()
+    private static var cache: (url: URL, data: Data, sha256: String)?
 }
 
 struct UpdateOffer: Encodable {

@@ -68,6 +68,9 @@ struct DotSegmented<Value: Hashable>: View {
                     selection = option.value
                 } label: {
                     Text(option.label)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .minimumScaleFactor(0.75)
                         .font(mono ? Dot.mono(12, selected ? .medium : .regular) : Dot.text(12.5, selected ? .semibold : .regular))
                         .foregroundStyle(selected ? Dot.canvas : Dot.inkSecondary)
                         .frame(maxWidth: .infinity, minHeight: 30)

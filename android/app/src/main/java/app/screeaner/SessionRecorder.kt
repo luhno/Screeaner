@@ -20,14 +20,16 @@ import java.util.Locale
  * so runs can be compared (USB vs Wi-Fi, codecs, bitrates, ...).
  *
  * Files live in the app's external "sessions" folder and are also copied to
- * Downloads/Screeaner on Android 10+. Use from a single thread.
+ * Downloads/Screeaner on Android 10+. All writes go through one background
+ * thread (MainActivity's I/O executor); the UI only reads [isRecording] and
+ * [elapsedSeconds].
  */
 class SessionRecorder(private val context: Context) {
     class Summary(val file: File, val seconds: Int, val text: String, val publicLocation: String?)
 
-    private var writer: BufferedWriter? = null
+    @Volatile private var writer: BufferedWriter? = null
     private var file: File? = null
-    private var startedAt = 0L
+    @Volatile private var startedAt = 0L
     private var rows = 0
     private val latencies = ArrayList<Double>()
     private var fpsSum = 0L
@@ -42,6 +44,21 @@ class SessionRecorder(private val context: Context) {
 
     val isRecording: Boolean get() = writer != null
     val elapsedSeconds: Int get() = ((SystemClock.elapsedRealtime() - startedAt) / 1000).toInt()
+
+    /**
+     * The text to share for [file]. A long session keeps its header and its
+     * end (where the summary is), dropping rows from the middle, so the shared
+     * text stays well under Android's transaction size limit.
+     */
+    fun shareText(file: File, maxChars: Int = 90_000): String {
+        val text = file.readText()
+        if (text.length <= maxChars) return text
+        val headEnd = text.indexOf(HEADER).let { if (it < 0) 2_000 else it + HEADER.length + 1 }
+        val head = text.substring(0, minOf(headEnd, maxChars / 4))
+        val tail = text.substring(text.length - (maxChars - head.length))
+        val cut = tail.indexOf('\n').let { if (it < 0) 0 else it + 1 }
+        return head + "# … (linhas do meio omitidas)\n" + tail.substring(cut)
+    }
 
     /** Most recent finished recording, if any. */
     fun lastFile(): File? = directory().listFiles { f -> f.name.endsWith(".csv") }?.maxByOrNull { it.lastModified() }

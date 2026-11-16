@@ -73,6 +73,15 @@ final class StreamSession {
     private(set) var summary = ""
     /// Set when the session ended because of an error worth showing.
     private(set) var failure: String?
+    /// Latest status message, shown on this tablet's row in the menu.
+    private(set) var lastStatus = ""
+    /// A 0.6 tablet app: it can only be updated, never streams.
+    private(set) var isLegacy = false
+
+    /// The stream is set up (display, encoder, capture); false while pairing or for a legacy app.
+    var hasStarted: Bool { began }
+    var displayMode: DisplayMode { mode }
+    var codecName: String { codec == .hevc ? "HEVC" : "H.264" }
 
     // Connection queue: handshake and input
     private var handshake = Handshake.waitingHello
@@ -84,6 +93,8 @@ final class StreamSession {
     private let captureQueue = DispatchQueue(label: "screeaner.capture", qos: .userInteractive)
     private var display: VirtualDisplay?
     private var began = false
+    /// Main queue. Whether the tablet asked for the shared clipboard (the menu setting is applied live on top).
+    private var tabletWantsClipboard = false
     private var capturer: ScreenCapturer?
     private var controller: BitrateController?
     private var adaptive = true
@@ -116,6 +127,7 @@ final class StreamSession {
     private let lock = NSLock()
     private var stopped = false
     private var established = false
+    private var legacyClient = false
     private var videoKeys: SecureChannel.Session?
     private var clipboardEnabled = false
     private var frames = 0
@@ -153,9 +165,30 @@ final class StreamSession {
         // Nobody gets to sit half-connected forever.
         DispatchQueue.main.asyncAfter(deadline: .now() + 120) { [weak self] in
             guard let self, !self.isEstablished, !self.isStopped else { return }
+            if self.isLegacyClient {
+                // An old app being updated: give the user and the APK transfer much longer.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 600) { [weak self] in
+                    guard let self, !self.isStopped else { return }
+                    self.stop()
+                }
+                return
+            }
             self.connection.send(.secDenied, Data("Tempo esgotado esperando a aprovação no Mac".utf8))
             self.stop()
         }
+    }
+
+    private var isLegacyClient: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return legacyClient
+    }
+
+    /// The menu's clipboard setting changed: applied live, no reconnect.
+    func setClipboardAllowed(_ allowed: Bool) {
+        lock.lock()
+        clipboardEnabled = tabletWantsClipboard && allowed
+        lock.unlock()
     }
 
     // MARK: - Pairing handshake (connection queue)
@@ -203,10 +236,14 @@ final class StreamSession {
             // 0.6 or older: plain HELLO, no pairing. Offer it the update instead.
             guard let hello = try? JSONDecoder().decode(Hello.self, from: payload) else { return abortHandshake() }
             handshake = .legacy
+            lock.lock()
+            legacyClient = true
+            lock.unlock()
             connection.allowLegacyUpdates()
             DispatchQueue.main.async {
                 self.clientName = hello.name
                 self.clientVersion = hello.version
+                self.isLegacy = true
                 self.summary = "App antigo (v\(hello.version ?? "?")): só pode ser atualizado"
                 self.onLegacyClient?()
             }
@@ -268,7 +305,7 @@ final class StreamSession {
                 self.onPairingFinished?(request)
             }
             if needsApproval { self.onPaired?() }
-            self.onStatus?("Tablet conectado com segurança")
+            self.report("Tablet conectado com segurança")
         }
     }
 
@@ -517,9 +554,8 @@ final class StreamSession {
         controller = BitrateController(maximum: bitrate)
         clientName = hello.name
         clientVersion = hello.version
-        lock.lock()
-        clipboardEnabled = (hello.clipboard ?? false) && defaults.bool(forKey: SettingsKey.clipboard)
-        lock.unlock()
+        tabletWantsClipboard = hello.clipboard ?? false
+        setClipboardAllowed(defaults.bool(forKey: SettingsKey.clipboard))
         onHello?() // lets the app retire a stale session of the same tablet first
 
         mode = DisplayMode(rawValue: hello.mode ?? "") ?? .extend
@@ -558,7 +594,7 @@ final class StreamSession {
         }
         self.capturer = capturer
         updateSummary(hello)
-        onStatus?("Iniciando captura…")
+        report("Iniciando captura…")
 
         captureQueue.async {
             self.encoder = encoder
@@ -573,7 +609,7 @@ final class StreamSession {
                 DispatchQueue.main.async {
                     guard !self.isStopped else { return }
                     self.applyArrangement()
-                    self.onStatus?("Transmitindo")
+                    self.report("Transmitindo")
                 }
             } catch {
                 DispatchQueue.main.async {
@@ -588,11 +624,12 @@ final class StreamSession {
         guard mode != .mirror else { return }
         let makeMain = mode == .main || mode == .only
         if !DisplayArranger.arrange(captureID, position: position, makeMain: makeMain) {
-            onStatus?("O macOS não aceitou reposicionar o display do tablet")
+            report("O macOS não aceitou reposicionar o display do tablet")
         }
         if mode == .only, mirrored.isEmpty {
-            mirrored = DisplayArranger.mirrorMacScreens(onto: captureID)
+            // Dim first: once a screen mirrors the tablet it is no longer listed as a Mac screen.
             dimmed = Brightness.dimBuiltIn()
+            mirrored = DisplayArranger.mirrorMacScreens(onto: captureID)
         }
     }
 
@@ -629,7 +666,7 @@ final class StreamSession {
             DispatchQueue.main.async {
                 guard !self.isStopped else { return }
                 self.applyArrangement()
-                self.onStatus?("Transmitindo")
+                self.report("Transmitindo")
             }
         }
     }
@@ -725,9 +762,17 @@ final class StreamSession {
     }
 
     private func fail(_ message: String) {
+        // A capture ending after a normal stop is not a failure.
+        guard !isStopped else { return }
         failure = message
-        onStatus?(message)
+        report(message)
         stop()
+    }
+
+    /// Main queue: remembers the latest status for this tablet's row, then tells the app.
+    private func report(_ message: String) {
+        lastStatus = message
+        onStatus?(message)
     }
 
     func stop() {

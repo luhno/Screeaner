@@ -7,6 +7,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.accessory)
         AppModel.shared.start()
     }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        // Ends the streams and restores a dimmed built-in screen before the process goes.
+        AppModel.shared.shutdown()
+    }
 }
 
 @main
@@ -34,10 +39,38 @@ struct MenuView: View {
     @AppStorage(SettingsKey.autoOpenApp) private var autoOpenApp = true
     @AppStorage(SettingsKey.mirrorScreen) private var mirrorScreen = ""
     @State private var showPaired = false
+    @State private var contentHeight: CGFloat = 0
+
+    /// Taller than this, the middle of the menu scrolls (header and footer stay put).
+    private var maxScrollHeight: CGFloat {
+        let screen = NSScreen.main?.visibleFrame.height ?? 800
+        return max(240, screen - 190)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             header
+            if let notice = model.notice { noticeBanner(notice) }
+            ScrollView(.vertical, showsIndicators: contentHeight > maxScrollHeight) {
+                content
+                    .background(GeometryReader { geometry in
+                        Color.clear.preference(key: ContentHeightKey.self, value: geometry.size.height)
+                    })
+            }
+            .frame(height: min(max(contentHeight, 1), maxScrollHeight))
+            .onPreferenceChange(ContentHeightKey.self) { contentHeight = $0 }
+            footer
+        }
+        .padding(18)
+        .frame(width: 360)
+        .background(Dot.canvas)
+        .foregroundStyle(Dot.ink)
+        .environment(\.colorScheme, .dark)
+        .onAppear { model.menuOpened() }
+    }
+
+    private var content: some View {
+        VStack(alignment: .leading, spacing: 16) {
             ForEach(model.pairingRequests) { request in
                 PairingRequestView(request: request) { allowed in
                     model.respond(to: request, allowed: allowed)
@@ -56,13 +89,28 @@ struct MenuView: View {
             if !model.hasScreenPermission || !model.hasInputPermission {
                 permissions
             }
-            footer
         }
-        .padding(18)
-        .frame(width: 360)
-        .background(Dot.canvas)
-        .foregroundStyle(Dot.ink)
-        .environment(\.colorScheme, .dark)
+    }
+
+    private func noticeBanner(_ notice: Notice) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            DotMarker(color: notice.isError ? Dot.signal : Dot.ink)
+            Text(notice.text).font(Dot.text(12.5))
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+            Spacer(minLength: 4)
+            Button {
+                model.dismissNotice()
+            } label: {
+                Text("×").font(Dot.text(14, .medium)).foregroundStyle(Dot.inkSecondary)
+            }
+            .buttonStyle(.plain)
+            .help("Fechar")
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 12).fill(Dot.surface))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(notice.isError ? Dot.signal : Dot.line, lineWidth: 1))
     }
 
     private var header: some View {
@@ -72,8 +120,8 @@ struct MenuView: View {
                 .tracking(0.8)
             Spacer()
             HStack(spacing: 6) {
-                DotMarker(color: model.tablets.isEmpty ? Dot.inkSecondary : Dot.signal)
-                Text(model.tablets.isEmpty ? "AGUARDANDO" : "AO VIVO")
+                DotMarker(color: model.liveCount == 0 ? Dot.inkSecondary : Dot.signal)
+                Text(model.liveCount == 0 ? "AGUARDANDO" : (model.liveCount == 1 ? "AO VIVO" : "AO VIVO · \(model.liveCount)"))
                     .font(Dot.mono(10.5))
                     .tracking(1)
                     .foregroundStyle(Dot.inkSecondary)
@@ -96,7 +144,14 @@ struct MenuView: View {
 
     private func card(_ tablet: TabletRow) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(tablet.name).font(Dot.text(14, .semibold))
+            HStack(spacing: 6) {
+                if tablet.live { DotMarker(color: Dot.signal) }
+                Text(tablet.name).font(Dot.text(14, .semibold))
+            }
+            if !tablet.status.isEmpty && tablet.status != "Transmitindo" {
+                Text(tablet.status).font(Dot.text(12)).foregroundStyle(Dot.inkSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             if !tablet.detail.isEmpty {
                 Text(tablet.detail).font(Dot.mono(11)).foregroundStyle(Dot.inkSecondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -109,7 +164,9 @@ struct MenuView: View {
                 Rectangle().fill(Dot.line).frame(height: 1)
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     DotMarker(color: Dot.signal)
-                    Text("Encoder normal: cerca de 1 quadro a mais de atraso. Teste o H.264.")
+                    Text(tablet.codec == "HEVC"
+                         ? "Encoder normal: cerca de 1 quadro a mais de atraso. Teste o H.264."
+                         : "Encoder normal: cerca de 1 quadro a mais de atraso. Rode o benchmark no tablet para achar a melhor configuração.")
                         .font(Dot.text(12))
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -140,10 +197,22 @@ struct MenuView: View {
             }
             if model.macScreenNames.count > 1 {
                 section("05 / Tela espelhada") {
-                    DotSegmented(
-                        options: [(label: "Principal", value: "")] + model.macScreenNames.map { (label: $0, value: $0) },
-                        selection: $mirrorScreen
-                    )
+                    let options = [(label: "Principal", value: "")] + model.macScreenNames.map { (label: $0, value: $0) }
+                    // Long names or many screens do not fit as segments: use a menu.
+                    if options.count <= 3 && model.macScreenNames.allSatisfy({ $0.count <= 14 }) {
+                        DotSegmented(options: options, selection: $mirrorScreen)
+                    } else {
+                        Picker("", selection: $mirrorScreen) {
+                            ForEach(options, id: \.value) { Text($0.label).tag($0.value) }
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.menu)
+                    }
+                    if !mirrorScreen.isEmpty && !model.macScreenNames.contains(mirrorScreen) {
+                        Text("“\(mirrorScreen)” não está conectada: espelhando a tela principal.")
+                            .font(Dot.text(11.5)).foregroundStyle(Dot.inkSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
             }
             VStack(spacing: 0) {
@@ -157,9 +226,18 @@ struct MenuView: View {
                     .opacity(model.adbAvailable && autoAdb ? 1 : 0.45)
                 toggleRow("Área de transferência compartilhada", isOn: $clipboard)
                 toggleRow("Abrir o Screeaner ao iniciar o Mac", isOn: Binding(
-                    get: { model.launchAtLogin },
-                    set: { model.launchAtLogin = $0 }
+                    get: { model.launchAtLoginEnabled || model.launchAtLoginNeedsApproval },
+                    set: { model.setLaunchAtLogin($0) }
                 ))
+                if model.launchAtLoginNeedsApproval {
+                    HStack(spacing: 8) {
+                        Text("Falta aprovar em Ajustes › Itens de Início.")
+                            .font(Dot.text(11.5)).foregroundStyle(Dot.inkSecondary)
+                        Spacer()
+                        Button("Abrir") { model.openLoginItemsSettings() }.buttonStyle(DotButtonStyle())
+                    }
+                    .padding(.vertical, 6)
+                }
             }
             .overlay(alignment: .top) { Rectangle().fill(Dot.line).frame(height: 1) }
             if !model.tablets.isEmpty {
@@ -173,8 +251,9 @@ struct MenuView: View {
         .onChange(of: codec) { _ in model.restartSessions() }
         .onChange(of: adaptiveBitrate) { _ in model.restartSessions() }
         .onChange(of: udpOverWifi) { _ in model.restartSessions() }
-        .onChange(of: clipboard) { _ in model.restartSessions() }
-        .onChange(of: mirrorScreen) { _ in model.restartSessions() }
+        .onChange(of: clipboard) { model.clipboardSettingChanged($0) }
+        .onChange(of: mirrorScreen) { _ in model.restartSessions(onlyMirror: true) }
+        .onChange(of: autoAdb) { model.autoAdbChanged($0) }
     }
 
     /// Tablets allowed to connect without a code; removing one makes it pair again.
@@ -268,7 +347,7 @@ struct MenuView: View {
 
     private var footer: some View {
         HStack(alignment: .center) {
-            let addresses = AppModel.localIPAddresses()
+            let addresses = model.ipAddresses
             VStack(alignment: .leading, spacing: 2) {
                 Text(addresses.isEmpty ? "sem rede" : addresses.joined(separator: " · "))
                     .textSelection(.enabled)
@@ -285,4 +364,10 @@ struct MenuView: View {
     private func open(_ string: String) {
         if let url = URL(string: string) { NSWorkspace.shared.open(url) }
     }
+}
+
+/// Height of the menu's scrolling middle, measured so the window hugs short content.
+private struct ContentHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
 }
