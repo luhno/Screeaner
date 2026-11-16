@@ -5,13 +5,20 @@ import ScreeanerCore
 /// One connected tablet. Parses incoming messages and sends outgoing ones,
 /// tracking how many video frames are still waiting in the socket so the
 /// pipeline can drop frames *before* encoding instead of queueing latency.
+///
+/// Until `establish` is called only handshake messages are accepted; after
+/// it, everything is sealed with the session keys in both directions.
 final class ClientConnection {
     private let conn: NWConnection
-    private let queue = DispatchQueue(label: "screeaner.client", qos: .userInteractive)
+    let queue = DispatchQueue(label: "screeaner.client", qos: .userInteractive)
     private var buffer = Data()
     private let lock = NSLock()
+    /// Serializes sealing and sending so message counters match the TCP order.
+    private let sendLock = NSLock()
     private var inFlightFrames = 0
     private var closed = false
+    private var secure: SecureChannel.Session?   // set under sendLock; read on `queue` after that
+    private var receiving: SecureChannel.Session?  // `queue` only
 
     let peer: String
     /// True when the tablet reached us through `adb reverse` (USB).
@@ -59,27 +66,51 @@ final class ClientConnection {
         return inFlightFrames >= 3
     }
 
+    /// Switches both directions to the session keys. Call on `queue`, right
+    /// after sending the last clear handshake message.
+    func establish(_ session: SecureChannel.Session) {
+        sendLock.lock()
+        secure = session
+        sendLock.unlock()
+        receiving = session
+    }
+
+    var isEstablished: Bool {
+        sendLock.lock()
+        defer { sendLock.unlock() }
+        return secure != nil
+    }
+
     func send(_ type: MsgType, _ payload: Data = Data()) {
-        var message = Data(capacity: Proto.headerSize + payload.count)
-        message.append(type.rawValue)
-        message.appendBE(UInt32(payload.count))
-        message.append(payload)
-        transmit(message, isFrame: false)
+        transmit(type, payload, isFrame: false)
     }
 
     func sendVideo(_ accessUnit: Data, ptsMicros: UInt64, isKey: Bool, encodeMicros: UInt32) {
-        let payloadSize = 13 + accessUnit.count
-        var message = Data(capacity: Proto.headerSize + payloadSize)
-        message.append(MsgType.video.rawValue)
-        message.appendBE(UInt32(payloadSize))
-        message.appendBE(ptsMicros)
-        message.append(isKey ? 1 : 0)
-        message.appendBE(encodeMicros)
-        message.append(accessUnit)
-        transmit(message, isFrame: true)
+        var payload = Data(capacity: 13 + accessUnit.count)
+        payload.appendBE(ptsMicros)
+        payload.append(isKey ? 1 : 0)
+        payload.appendBE(encodeMicros)
+        payload.append(accessUnit)
+        transmit(.video, payload, isFrame: true)
     }
 
-    private func transmit(_ message: Data, isFrame: Bool) {
+    private func transmit(_ type: MsgType, _ payload: Data, isFrame: Bool) {
+        sendLock.lock()
+        defer { sendLock.unlock() }
+        var wireType = type
+        var body = payload
+        if let secure {
+            guard let sealed = try? secure.seal(type: type.rawValue, payload: payload) else { return }
+            wireType = .encrypted
+            body = sealed
+        } else if !type.isHandshake {
+            return // nothing but the handshake leaves before encryption is on
+        }
+        var message = Data(capacity: Proto.headerSize + body.count)
+        message.append(wireType.rawValue)
+        message.appendBE(UInt32(body.count))
+        message.append(body)
+
         if isFrame {
             lock.lock()
             inFlightFrames += 1
@@ -124,7 +155,16 @@ final class ClientConnection {
             guard buffer.count >= total else { break }
             let payload = Data(buffer.dropFirst(Proto.headerSize).prefix(length))
             buffer = Data(buffer.dropFirst(total))
-            if let type = MsgType(rawValue: rawType) {
+            guard let type = MsgType(rawValue: rawType) else { continue }
+            if let session = receiving {
+                // Once encrypted, anything else is an attack or a bug.
+                guard type == .encrypted,
+                      let (innerRaw, inner) = try? session.open(payload),
+                      let innerType = MsgType(rawValue: innerRaw)
+                else { return false }
+                onMessage?(innerType, inner)
+            } else {
+                guard type.isHandshake else { return false }
                 onMessage?(type, payload)
             }
         }

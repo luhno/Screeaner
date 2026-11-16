@@ -30,12 +30,24 @@ struct MenuView: View {
     @AppStorage(SettingsKey.autoAdb) private var autoAdb = true
     @AppStorage(SettingsKey.adaptiveBitrate) private var adaptiveBitrate = true
     @AppStorage(SettingsKey.udpOverWifi) private var udpOverWifi = true
+    @AppStorage(SettingsKey.clipboard) private var clipboard = true
+    @AppStorage(SettingsKey.autoOpenApp) private var autoOpenApp = true
+    @AppStorage(SettingsKey.mirrorScreen) private var mirrorScreen = ""
+    @State private var showPaired = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             header
+            if !model.pairingRequests.isEmpty {
+                Divider()
+                pairing
+            }
             Divider()
             settings
+            Divider()
+            system
+            Divider()
+            paired
             if !model.hasScreenPermission || !model.hasInputPermission {
                 Divider()
                 permissions
@@ -101,6 +113,63 @@ struct MenuView: View {
         .onChange(of: codec) { _ in model.restartSessions() }
         .onChange(of: adaptiveBitrate) { _ in model.restartSessions() }
         .onChange(of: udpOverWifi) { _ in model.restartSessions() }
+    }
+
+    /// Same choice as the floating window, for when it is hidden behind something.
+    private var pairing: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ForEach(model.pairingRequests) { request in
+                PairingRequestView(request: request) { allowed in
+                    model.respond(to: request, allowed: allowed)
+                }
+            }
+        }
+    }
+
+    private var system: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Toggle("Abrir o Screeaner ao iniciar o Mac", isOn: Binding(
+                get: { model.launchAtLogin },
+                set: { model.launchAtLogin = $0 }
+            ))
+            Toggle("Abrir o app no tablet ao conectar o USB", isOn: $autoOpenApp)
+                .disabled(!model.adbAvailable || !autoAdb)
+            Toggle("Compartilhar a área de transferência (texto)", isOn: $clipboard)
+            if model.macScreenNames.count > 1 {
+                Picker("Tela espelhada", selection: $mirrorScreen) {
+                    Text("Tela principal").tag("")
+                    ForEach(model.macScreenNames, id: \.self) { Text($0).tag($0) }
+                }
+            }
+        }
+        .onChange(of: clipboard) { _ in model.restartSessions() }
+        .onChange(of: mirrorScreen) { _ in model.restartSessions() }
+    }
+
+    private var paired: some View {
+        DisclosureGroup(isExpanded: $showPaired) {
+            VStack(alignment: .leading, spacing: 6) {
+                if model.pairedTablets.isEmpty {
+                    Text("Nenhum tablet pareado ainda. Na primeira conexão, o Mac e o tablet mostram o mesmo código para você confirmar.")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                ForEach(model.pairedTablets) { tablet in
+                    HStack {
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(tablet.name).font(.callout)
+                            Text("Pareado em \(tablet.pairedAt.formatted(date: .abbreviated, time: .shortened))")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button("Remover") { model.revoke(tablet) }
+                    }
+                }
+            }
+            .padding(.top, 4)
+        } label: {
+            Text("Tablets autorizados (\(model.pairedTablets.count))").font(.callout.weight(.medium))
+        }
     }
 
     private var usbHint: String {

@@ -13,6 +13,10 @@ final class InputInjector {
     private var clickCount: Int64 = 1
     private var modifiers: CGEventFlags = []
     private var heldModifierKeys = Set<CGKeyCode>()
+    private var penInProximity = false
+    private var penTool: UInt8 = 1
+    /// Identifies our virtual pen to apps that track tablet devices.
+    private static let tabletDeviceID: Int64 = 0x5343
 
     /// Part of the tablet screen (normalized) that shows the display; smaller
     /// than the whole screen when a mirrored Mac screen is letterboxed.
@@ -47,9 +51,20 @@ final class InputInjector {
 
     // MARK: - Pointer
 
-    /// action: 0 down, 1 move (dragging), 2 up, 3 hover. button: 0 left, 1 right.
-    func touch(action: UInt8, x: Float, y: Float, pressure: Float, button: UInt8) {
+    /// action: 0 down, 1 move (dragging), 2 up, 3 hover, 4 pen enters range, 5 pen leaves.
+    /// button: 0 left, 1 right. tool: 0 finger or mouse, 1 pen, 2 eraser.
+    /// Pen input carries pressure and tilt (-1...1) as tablet events, which
+    /// drawing apps read like a graphics tablet.
+    func touch(action: UInt8, x: Float, y: Float, pressure: Float, button: UInt8,
+               tiltX: Float = 0, tiltY: Float = 0, tool: UInt8 = 0) {
         let location = point(x, y)
+        let isPen = tool == 1 || tool == 2
+        if action == 4 || action == 5 {
+            proximity(entering: action == 4, tool: tool)
+            if action == 4 { moveCursor(to: location) }
+            return
+        }
+        if isPen && !penInProximity { proximity(entering: true, tool: tool) }
         let right = button == 1
         let type: CGEventType
         switch action {
@@ -78,8 +93,38 @@ final class InputInjector {
             event.setIntegerValueField(.mouseEventClickState, value: clickCount)
             event.setDoubleValueField(.mouseEventPressure, value: Double(action == 2 ? 0 : max(pressure, 0.01)))
         }
+        if isPen {
+            event.setIntegerValueField(.mouseEventSubtype, value: Int64(CGEventMouseSubtype.tabletPoint.rawValue))
+            event.setDoubleValueField(.tabletEventPointPressure, value: Double(action == 2 || action == 3 ? 0 : pressure))
+            event.setDoubleValueField(.tabletEventTiltX, value: Double(max(-1, min(1, tiltX))))
+            event.setDoubleValueField(.tabletEventTiltY, value: Double(max(-1, min(1, tiltY))))
+            event.setIntegerValueField(.tabletEventDeviceID, value: Self.tabletDeviceID)
+            event.setIntegerValueField(.tabletEventPointX, value: Int64(location.x))
+            event.setIntegerValueField(.tabletEventPointY, value: Int64(location.y))
+        }
         // Shift-click, Cmd-click etc. with the tablet's keyboard.
         if !modifiers.isEmpty { event.flags.formUnion(modifiers) }
+        event.post(tap: .cghidEventTap)
+    }
+
+    /// Tells apps a pen (or eraser) came into or left the tablet's range.
+    private func proximity(entering: Bool, tool: UInt8) {
+        guard entering != penInProximity || (entering && tool != penTool) else { return }
+        penInProximity = entering
+        penTool = tool
+        guard let event = CGEvent(source: source) else { return }
+        event.type = .tabletProximity
+        event.setIntegerValueField(.tabletProximityEventVendorID, value: 0x5343)
+        event.setIntegerValueField(.tabletProximityEventTabletID, value: 1)
+        event.setIntegerValueField(.tabletProximityEventPointerID, value: 1)
+        event.setIntegerValueField(.tabletProximityEventDeviceID, value: Self.tabletDeviceID)
+        event.setIntegerValueField(.tabletProximityEventSystemTabletID, value: 1)
+        event.setIntegerValueField(.tabletProximityEventVendorPointerType, value: tool == 2 ? 0x080A : 0x0802)
+        event.setIntegerValueField(.tabletProximityEventVendorPointerSerialNumber, value: 1)
+        // Capabilities: absolute x/y, buttons, pressure, tilt x/y.
+        event.setIntegerValueField(.tabletProximityEventCapabilityMask, value: 0x0001 | 0x0002 | 0x0040 | 0x0400 | 0x0080 | 0x0100)
+        event.setIntegerValueField(.tabletProximityEventPointerType, value: tool == 2 ? 3 : 1) // 1 pen, 3 eraser
+        event.setIntegerValueField(.tabletProximityEventEnterProximity, value: entering ? 1 : 0)
         event.post(tap: .cghidEventTap)
     }
 
@@ -122,8 +167,8 @@ final class InputInjector {
     // MARK: - Keyboard
 
     /// action: 0 down, 1 up. Unknown keys are ignored.
-    func key(action: UInt8, androidKeyCode: Int, isRepeat: Bool) {
-        guard let keyCode = KeyMap.mac[androidKeyCode] else { return }
+    func key(action: UInt8, androidKeyCode: Int, scanCode: Int = 0, isRepeat: Bool) {
+        guard let keyCode = KeyMap.macKey(androidKeyCode: androidKeyCode, scanCode: scanCode) else { return }
         let down = action == 0
         let modifier = KeyMap.modifier(for: keyCode)
         if let modifier {
@@ -155,6 +200,7 @@ final class InputInjector {
 
     /// Releases anything still held, so a dropped connection never leaves Cmd or Shift stuck.
     func releaseAll() {
+        if penInProximity { proximity(entering: false, tool: penTool) }
         let held = heldModifierKeys
         heldModifierKeys.removeAll()
         modifiers = []

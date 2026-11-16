@@ -8,6 +8,8 @@
     <string>Screeaner</string>
     <key>CFBundleIdentifier</key>
     <string>app.screeaner.mac</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>CFBundleExecutable</key>
     <string>Screeaner</string>
     <key>CFBundlePackageType</key>

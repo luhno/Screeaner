@@ -17,8 +17,10 @@ final class VirtualDisplay {
         let descriptor = CGVirtualDisplayDescriptor()
         descriptor.setDispatchQueue(DispatchQueue.main)
         descriptor.name = name
-        descriptor.maxPixelsWide = UInt32(pixelWidth)
-        descriptor.maxPixelsHigh = UInt32(pixelHeight)
+        // Room for both orientations, so rotating only changes the mode.
+        let longest = UInt32(max(pixelWidth, pixelHeight))
+        descriptor.maxPixelsWide = longest
+        descriptor.maxPixelsHigh = longest
         let safeDpi = Double(max(80, min(dpi, 800)))
         descriptor.sizeInMillimeters = CGSize(
             width: Double(pixelWidth) / safeDpi * 25.4,
@@ -29,7 +31,15 @@ final class VirtualDisplay {
         descriptor.serialNum = serial
 
         guard let display = CGVirtualDisplay(descriptor: descriptor) else { return nil }
+        self.display = display
+        guard apply(pixelWidth: pixelWidth, pixelHeight: pixelHeight, hiDPI: hiDPI, refreshRate: refreshRate) else {
+            return nil
+        }
+    }
 
+    /// Changes the resolution in place (e.g. when the tablet rotates); windows stay put.
+    @discardableResult
+    func apply(pixelWidth: Int, pixelHeight: Int, hiDPI: Bool, refreshRate: Double) -> Bool {
         let settings = CGVirtualDisplaySettings()
         settings.hiDPI = hiDPI ? 1 : 0
         // In HiDPI the mode is expressed in points; the backing store is 2x.
@@ -41,8 +51,7 @@ final class VirtualDisplay {
                 refreshRate: refreshRate
             )
         ]
-        guard display.applySettings(settings) else { return nil }
-        self.display = display
+        return display.applySettings(settings)
     }
 
     /// FNV-1a, so the same tablet always maps to the same serial number.

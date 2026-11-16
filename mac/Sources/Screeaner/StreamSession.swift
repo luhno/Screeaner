@@ -1,6 +1,7 @@
 import CoreGraphics
 import CoreMedia
 import CoreVideo
+import CryptoKit
 import Foundation
 import Network
 import ScreeanerCore
@@ -13,18 +14,30 @@ enum SettingsKey {
     static let autoAdb = "autoAdb"
     static let adaptiveBitrate = "adaptiveBitrate"
     static let udpOverWifi = "udpOverWifi"
+    static let clipboard = "clipboard"
+    static let autoOpenApp = "autoOpenApp"
+    /// Name of the Mac screen the mirror mode shows (empty = main screen).
+    static let mirrorScreen = "mirrorScreen"
 
     static func registerDefaults() {
         UserDefaults.standard.register(defaults: [
             hiDPI: true, fps: 60, bitrateMbps: 20, codec: Codec.h264.rawValue, autoAdb: true,
-            adaptiveBitrate: true, udpOverWifi: true,
+            adaptiveBitrate: true, udpOverWifi: true, clipboard: true, autoOpenApp: true, mirrorScreen: "",
         ])
     }
 }
 
-/// The whole pipeline for one tablet:
-/// virtual display -> ScreenCaptureKit -> VideoToolbox -> TCP or UDP+FEC,
-/// plus input the other way. Several sessions can run side by side.
+/// A tablet waiting for the user to allow it, showing `code` on both screens.
+struct PairingRequest: Identifiable {
+    let id = UUID()
+    let name: String
+    let code: String
+    let decide: (Bool) -> Void
+}
+
+/// Everything for one tablet: the pairing handshake, then
+/// virtual display -> ScreenCaptureKit -> VideoToolbox -> TCP or UDP+FEC (encrypted),
+/// plus input, clipboard, audio and latency probes. Several sessions can run side by side.
 final class StreamSession {
     struct Stats {
         var fps = 0
@@ -36,22 +49,52 @@ final class StreamSession {
         var transport = "TCP"
     }
 
+    private enum Handshake {
+        case waitingHello
+        case waitingReveal(hello: SecureChannel.Hello, helloPayload: Data, serverPayload: Data,
+                           ephemeral: P256.KeyAgreement.PrivateKey, known: Bool)
+        case waitingConfirm(session: SecureChannel.Session, hello: SecureChannel.Hello, needsApproval: Bool)
+        case done
+    }
+
     let connection: ClientConnection
     /// Echoed by the tablet in its UDP hello so the flow can be matched to this session.
     let token = UInt32.random(in: 1...UInt32.max)
+    // Main queue
     private(set) var clientName = "Tablet"
     private(set) var deviceID: String?
     private(set) var summary = ""
     /// Set when the session ended because of an error worth showing.
     private(set) var failure: String?
 
+    // Connection queue: handshake and input
+    private var handshake = Handshake.waitingHello
+    private var approved = false
+    private var confirmed = false
+    private var injector: InputInjector?
+
+    // Main queue: pipeline state
     private let captureQueue = DispatchQueue(label: "screeaner.capture", qos: .userInteractive)
     private var display: VirtualDisplay?
     private var began = false
     private var capturer: ScreenCapturer?
-    private var injector: InputInjector?
-    private var controller: BitrateController?   // main queue
-    private var adaptive = true                  // main queue
+    private var controller: BitrateController?
+    private var adaptive = true
+    private var pendingRequest: UUID?
+    private var mode = DisplayMode.extend
+    private var position = DisplayPosition.auto
+    private var captureID: CGDirectDisplayID = 0
+    private var touchArea = DisplayArranger.unitArea
+    private var streamWidth = 0
+    private var streamHeight = 0
+    private var fps = 60
+    private var codec = Codec.h264
+    private var hiDPI = true
+    private var useUdp = false
+    private var wantsAudio = false
+    private var mirrored: [CGDirectDisplayID] = []
+    private var dimmed: [CGDirectDisplayID: Float] = [:]
+    private let marker = ProbeMarker()
 
     // captureQueue only
     private var encoder: VideoEncoder?
@@ -63,6 +106,9 @@ final class StreamSession {
     // Guarded by `lock`
     private let lock = NSLock()
     private var stopped = false
+    private var established = false
+    private var videoKeys: SecureChannel.Session?
+    private var clipboardEnabled = false
     private var frames = 0
     private var bytes = 0
     private var encodeMicrosSum = 0
@@ -81,6 +127,10 @@ final class StreamSession {
     var onHello: (() -> Void)?
     var onStatus: ((String) -> Void)?
     var onEnded: (() -> Void)?
+    var onPairingRequest: ((PairingRequest) -> Void)?
+    var onPairingFinished: ((UUID) -> Void)?
+    var onPaired: (() -> Void)?
+    var onClipboard: ((String) -> Void)?
 
     init(connection: ClientConnection) {
         self.connection = connection
@@ -90,11 +140,124 @@ final class StreamSession {
 
     func start() {
         connection.start()
+        // Nobody gets to sit half-connected forever.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 120) { [weak self] in
+            guard let self, !self.isEstablished, !self.isStopped else { return }
+            self.connection.send(.secDenied, Data("Tempo esgotado esperando a aprovação no Mac".utf8))
+            self.stop()
+        }
+    }
+
+    // MARK: - Pairing handshake (connection queue)
+
+    private var isEstablished: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return established
+    }
+
+    private func abortHandshake() {
+        connection.close()
+    }
+
+    private func handleHandshake(_ type: MsgType, _ payload: Data) {
+        let store = PairingStore.shared
+        switch (type, handshake) {
+        case (.secHello, .waitingHello):
+            guard let hello = try? SecureChannel.Hello(payload: payload) else { return abortHandshake() }
+            let known = store.isPaired(deviceId: hello.deviceId, publicKey: hello.staticPublic)
+            let ephemeral = P256.KeyAgreement.PrivateKey()
+            let server = SecureChannel.buildServer(
+                staticPublic: store.identity.publicKey.x963Representation,
+                ephemeralPublic: ephemeral.publicKey.x963Representation,
+                nonce: SecureChannel.randomBytes(SecureChannel.nonceSize),
+                knowsTablet: known, name: Host.current().localizedName ?? "Mac"
+            )
+            handshake = .waitingReveal(hello: hello, helloPayload: payload, serverPayload: server,
+                                       ephemeral: ephemeral, known: known)
+            connection.send(.secServer, server)
+            DispatchQueue.main.async { self.clientName = hello.name }
+
+        case let (.secReveal, .waitingReveal(hello, helloPayload, serverPayload, ephemeral, known)):
+            guard let reveal = try? SecureChannel.Reveal(payload: payload),
+                  SecureChannel.sha256(reveal.ephemeralPublic, reveal.nonce) == hello.commit,
+                  let ee = try? SecureChannel.ecdh(ephemeral, reveal.ephemeralPublic),
+                  let ss = try? SecureChannel.ecdh(store.identity, hello.staticPublic)
+            else { return abortHandshake() }
+            let transcript = SecureChannel.transcript(hello: helloPayload, server: serverPayload, reveal: payload)
+            let session = SecureChannel.Session(ee: ee, ss: ss, transcript: transcript, tabletSide: false)
+            handshake = .waitingConfirm(session: session, hello: hello, needsApproval: !known)
+            if !known { askUser(name: hello.name, code: session.sas) }
+
+        case let (.secConfirm, .waitingConfirm(session, _, _)):
+            guard Self.constantTimeEqual(payload, session.tabletConfirmation()) else { return abortHandshake() }
+            confirmed = true
+            finishHandshake()
+
+        default:
+            abortHandshake()
+        }
+    }
+
+    private func askUser(name: String, code: String) {
+        let request = PairingRequest(name: name, code: code) { [weak self] allowed in
+            guard let self else { return }
+            self.connection.queue.async {
+                if allowed {
+                    self.approved = true
+                    self.finishHandshake()
+                } else {
+                    self.connection.send(.secDenied, Data("Pareamento recusado no Mac".utf8))
+                    self.connection.close()
+                }
+            }
+        }
+        DispatchQueue.main.async {
+            self.pendingRequest = request.id
+            self.onPairingRequest?(request)
+        }
+    }
+
+    private func finishHandshake() {
+        guard case let .waitingConfirm(session, hello, needsApproval) = handshake,
+              confirmed, approved || !needsApproval
+        else { return }
+        if needsApproval {
+            PairingStore.shared.add(deviceId: hello.deviceId, name: hello.name, publicKey: hello.staticPublic)
+        }
+        // Last clear message, then everything is encrypted.
+        connection.send(.secOk, session.macConfirmation())
+        connection.establish(session)
+        handshake = .done
+        lock.lock()
+        established = true
+        videoKeys = session
+        lock.unlock()
+        DispatchQueue.main.async {
+            self.deviceID = hello.deviceId
+            if let request = self.pendingRequest {
+                self.pendingRequest = nil
+                self.onPairingFinished?(request)
+            }
+            if needsApproval { self.onPaired?() }
+            self.onStatus?("Tablet conectado com segurança")
+        }
+    }
+
+    private static func constantTimeEqual(_ a: Data, _ b: Data) -> Bool {
+        guard a.count == b.count else { return false }
+        var difference: UInt8 = 0
+        for (x, y) in zip(a, b) { difference |= x ^ y }
+        return difference == 0
     }
 
     // MARK: - Incoming messages (connection queue)
 
     private func handle(_ type: MsgType, _ payload: Data) {
+        guard case .done = handshake else {
+            handleHandshake(type, payload)
+            return
+        }
         let first = payload.startIndex
         switch type {
         case .hello:
@@ -105,12 +268,16 @@ final class StreamSession {
             DispatchQueue.main.async { self.begin(hello) }
         case .touch:
             guard payload.count >= 14 else { return }
+            let extended = payload.count >= 23
             injector?.touch(
                 action: payload[first],
                 x: payload.readFloat(at: 1),
                 y: payload.readFloat(at: 5),
                 pressure: payload.readFloat(at: 9),
-                button: payload[first + 13]
+                button: payload[first + 13],
+                tiltX: extended ? payload.readFloat(at: 14) : 0,
+                tiltY: extended ? payload.readFloat(at: 18) : 0,
+                tool: extended ? payload[first + 22] : 0
             )
         case .scroll:
             guard payload.count >= 16 else { return }
@@ -133,6 +300,7 @@ final class StreamSession {
             injector?.key(
                 action: payload[first],
                 androidKeyCode: Int(payload.readBE(UInt16.self, at: 1)),
+                scanCode: payload.count >= 6 ? Int(payload.readBE(UInt16.self, at: 4)) : 0,
                 isRepeat: payload[first + 3] & 1 != 0
             )
         case .keyframeRequest:
@@ -152,6 +320,19 @@ final class StreamSession {
             clientPacketsLost += Int(payload.readBE(UInt32.self, at: 8))
             clientFramesLost += Int(payload.readBE(UInt16.self, at: 12))
             lock.unlock()
+        case .resize:
+            guard let request = try? JSONDecoder().decode(Resize.self, from: payload) else { return }
+            DispatchQueue.main.async { self.resize(request) }
+        case .clipboard:
+            lock.lock()
+            let enabled = clipboardEnabled
+            lock.unlock()
+            guard enabled, let text = String(data: payload, encoding: .utf8) else { return }
+            DispatchQueue.main.async { self.onClipboard?(text) }
+        case .probe:
+            guard payload.count >= 4 else { return }
+            let id = payload.readBE(UInt32.self, at: 0)
+            DispatchQueue.main.async { self.probe(id) }
         default:
             break
         }
@@ -162,10 +343,41 @@ final class StreamSession {
             guard let encoder = self.encoder else { return }
             encoder.forceKeyframe()
             // The screen may be static, so re-encode the last frame right away.
-            if let frame = self.lastFrame {
+            if let frame = self.lastFrame, CVPixelBufferGetWidth(frame) == encoder.width {
                 self.lastEncodeTime = ProcessInfo.processInfo.systemUptime
                 encoder.encode(frame)
             }
+        }
+    }
+
+    // MARK: - Clipboard and probes (main queue)
+
+    func sendClipboard(_ text: String) {
+        lock.lock()
+        let enabled = clipboardEnabled && established
+        lock.unlock()
+        let data = Data(text.utf8)
+        guard enabled, !data.isEmpty, data.count <= 1_000_000 else { return }
+        connection.send(.clipboard, data)
+    }
+
+    /// End-to-end latency test: probe 0 shows the marker, then each probe flips it.
+    private func probe(_ id: UInt32) {
+        guard began, !isStopped else { return }
+        if id == 0 {
+            guard let rect = marker.show(on: captureID) else { return }
+            let area = touchArea
+            let mapped = CGRect(
+                x: area.minX + rect.minX * area.width, y: area.minY + rect.minY * area.height,
+                width: rect.width * area.width, height: rect.height * area.height
+            )
+            var payload = Data()
+            for value in [mapped.minX, mapped.minY, mapped.width, mapped.height] {
+                payload.appendBE(Float(value).bitPattern)
+            }
+            connection.send(.probeInfo, payload)
+        } else {
+            marker.set(lit: id % 2 == 1)
         }
     }
 
@@ -175,7 +387,7 @@ final class StreamSession {
     func attachUdp(_ flow: NWConnection) {
         lock.lock()
         let previous = udpFlow
-        let alive = !stopped
+        let alive = !stopped && established
         if alive {
             udpFlow = flow
             udpActive = false
@@ -209,39 +421,68 @@ final class StreamSession {
 
     // MARK: - Pipeline setup (main queue)
 
+    private func clampSize(_ width: Int, _ height: Int) -> (Int, Int) {
+        (min(max(width, 360), 4096) & ~1, min(max(height, 360), 4096) & ~1)
+    }
+
+    private func makeEncoder(width: Int, height: Int, bitrate: Int) -> VideoEncoder? {
+        guard let encoder = try? VideoEncoder(width: width, height: height, codec: codec, fps: fps, bitrate: bitrate)
+        else { return nil }
+        encoder.onEncoded = { [weak self] data, isKey, pts, encodeMicros in
+            self?.transmit(data, isKey: isKey, ptsMicros: pts, encodeMicros: encodeMicros)
+        }
+        return encoder
+    }
+
+    private func configMessage() -> Data? {
+        let config = StreamConfig(
+            codec: codec.rawValue, width: streamWidth, height: streamHeight, fps: fps,
+            token: useUdp ? token : 0, udpPort: Int(Proto.port), mode: mode.rawValue,
+            server: Host.current().localizedName ?? "Mac", version: Proto.appVersion, audio: wantsAudio
+        )
+        return try? JSONEncoder().encode(config)
+    }
+
+    private func updateSummary(_ hello: Hello? = nil) {
+        let orientation = streamWidth >= streamHeight ? "" : " · retrato"
+        let tabletApp = hello?.version.map { " · app \($0)" } ?? ""
+        let extras = (wantsAudio ? " · áudio" : "")
+        summary = "\(streamWidth)×\(streamHeight) · \(fps) Hz · \(codec == .hevc ? "HEVC" : "H.264")"
+            + "\(orientation)\(tabletApp)\(extras)\n\(mode.label(position))"
+    }
+
     private func begin(_ hello: Hello) {
         guard !began, !isStopped else { return }
         began = true
         let defaults = UserDefaults.standard
-        let hiDPI = defaults.bool(forKey: SettingsKey.hiDPI)
+        hiDPI = defaults.bool(forKey: SettingsKey.hiDPI)
         // Portrait tablets simply report width < height.
-        let width = min(max(hello.width, 360), 4096) & ~1
-        let height = min(max(hello.height, 360), 4096) & ~1
-        let fps = max(24, min(defaults.integer(forKey: SettingsKey.fps), Int(hello.refreshRate.rounded())))
+        (streamWidth, streamHeight) = clampSize(hello.width, hello.height)
+        fps = max(24, min(defaults.integer(forKey: SettingsKey.fps), Int(hello.refreshRate.rounded())))
         let wantsHEVC = defaults.string(forKey: SettingsKey.codec) == Codec.hevc.rawValue
-        let codec: Codec = (wantsHEVC && hello.codecs.contains(Codec.hevc.rawValue)) ? .hevc : .h264
+        codec = (wantsHEVC && hello.codecs.contains(Codec.hevc.rawValue)) ? .hevc : .h264
         let bitrate = max(2, defaults.integer(forKey: SettingsKey.bitrateMbps)) * 1_000_000
-        let useUdp = (hello.udp ?? false) && defaults.bool(forKey: SettingsKey.udpOverWifi)
-            && !connection.isLoopback
+        useUdp = (hello.udp ?? false) && defaults.bool(forKey: SettingsKey.udpOverWifi) && !connection.isLoopback
+        wantsAudio = hello.audio ?? false
         adaptive = defaults.bool(forKey: SettingsKey.adaptiveBitrate)
         controller = BitrateController(maximum: bitrate)
         clientName = hello.name
-        deviceID = hello.id
+        lock.lock()
+        clipboardEnabled = (hello.clipboard ?? false) && defaults.bool(forKey: SettingsKey.clipboard)
+        lock.unlock()
         onHello?() // lets the app retire a stale session of the same tablet first
 
-        let mode = DisplayMode(rawValue: hello.mode ?? "") ?? .extend
-        let position = DisplayPosition(rawValue: hello.position ?? "") ?? .auto
-        let captureID: CGDirectDisplayID
-        var touchArea = DisplayArranger.unitArea
+        mode = DisplayMode(rawValue: hello.mode ?? "") ?? .extend
+        position = DisplayPosition(rawValue: hello.position ?? "") ?? .auto
         if mode == .mirror {
             // Show the Mac's own screen: nothing to create, just capture it.
-            captureID = DisplayArranger.macScreen()
-            touchArea = DisplayArranger.fittedArea(of: captureID, width: width, height: height)
+            captureID = DisplayArranger.mirrorSource()
+            touchArea = DisplayArranger.fittedArea(of: captureID, width: streamWidth, height: streamHeight)
         } else {
             guard let display = VirtualDisplay(
                 name: "Screeaner – \(hello.name)",
-                serial: VirtualDisplay.serial(for: hello.id ?? hello.name),
-                pixelWidth: width, pixelHeight: height,
+                serial: VirtualDisplay.serial(for: deviceID ?? hello.name),
+                pixelWidth: streamWidth, pixelHeight: streamHeight,
                 hiDPI: hiDPI, refreshRate: Double(fps), dpi: hello.densityDpi
             ) else {
                 fail("Não foi possível criar o display virtual")
@@ -251,36 +492,22 @@ final class StreamSession {
             captureID = display.displayID
         }
 
-        let encoder: VideoEncoder
-        do {
-            encoder = try VideoEncoder(width: width, height: height, codec: codec, fps: fps, bitrate: bitrate)
-        } catch {
-            fail(error.localizedDescription)
+        guard let encoder = makeEncoder(width: streamWidth, height: streamHeight, bitrate: bitrate) else {
+            fail("Não foi possível criar o encoder de vídeo")
             return
         }
-        encoder.onEncoded = { [weak self] data, isKey, pts, encodeMicros in
-            self?.transmit(data, isKey: isKey, ptsMicros: pts, encodeMicros: encodeMicros)
-        }
-        injector = InputInjector(displayID: captureID, area: touchArea)
-
-        let config = StreamConfig(
-            codec: codec.rawValue, width: width, height: height, fps: fps,
-            token: useUdp ? token : 0, udpPort: Int(Proto.port), mode: mode.rawValue,
-            server: Host.current().localizedName ?? "Mac", version: Proto.appVersion
-        )
-        if let json = try? JSONEncoder().encode(config) {
-            connection.send(.config, json)
-        }
+        let injector = InputInjector(displayID: captureID, area: touchArea)
+        connection.queue.async { self.injector = injector }
+        if let json = configMessage() { connection.send(.config, json) }
 
         let capturer = ScreenCapturer(queue: captureQueue)
         capturer.onFrame = { [weak self] pixelBuffer in self?.captured(pixelBuffer) }
+        capturer.onAudio = { [weak self] pcm in self?.connection.send(.audio, pcm) }
         capturer.onStop = { [weak self] error in
             DispatchQueue.main.async { self?.fail("Captura interrompida: \(error.localizedDescription)") }
         }
         self.capturer = capturer
-        let orientation = width >= height ? "" : " · retrato"
-        let tabletApp = hello.version.map { " · app \($0)" } ?? ""
-        summary = "\(width)×\(height) · \(fps) Hz · \(codec == .hevc ? "HEVC" : "H.264")\(orientation)\(tabletApp)\n\(mode.label(position))"
+        updateSummary(hello)
         onStatus?("Iniciando captura…")
 
         captureQueue.async {
@@ -289,15 +516,13 @@ final class StreamSession {
         }
 
         let displayID = captureID
+        let (width, height, rate, audio) = (streamWidth, streamHeight, fps, wantsAudio)
         Task {
             do {
-                try await capturer.start(displayID: displayID, width: width, height: height, fps: fps)
+                try await capturer.start(displayID: displayID, width: width, height: height, fps: rate, audio: audio)
                 DispatchQueue.main.async {
-                    // The display surely exists now that capture found it.
-                    if mode != .mirror, !self.isStopped,
-                       !DisplayArranger.arrange(displayID, position: position, makeMain: mode == .main) {
-                        self.onStatus?("O macOS não aceitou reposicionar o display do tablet")
-                    }
+                    guard !self.isStopped else { return }
+                    self.applyArrangement()
                     self.onStatus?("Transmitindo")
                 }
             } catch {
@@ -308,9 +533,64 @@ final class StreamSession {
         }
     }
 
+    /// Positions the tablet's display, makes it main, or takes over the Mac's screens.
+    private func applyArrangement() {
+        guard mode != .mirror else { return }
+        let makeMain = mode == .main || mode == .only
+        if !DisplayArranger.arrange(captureID, position: position, makeMain: makeMain) {
+            onStatus?("O macOS não aceitou reposicionar o display do tablet")
+        }
+        if mode == .only, mirrored.isEmpty {
+            mirrored = DisplayArranger.mirrorMacScreens(onto: captureID)
+            dimmed = Brightness.dimBuiltIn()
+        }
+    }
+
+    /// The tablet rotated: change the display mode and the stream size in
+    /// place, keeping the connection, the pairing and the windows.
+    private func resize(_ request: Resize) {
+        guard began, !isStopped, let capturer else { return }
+        let (width, height) = clampSize(request.width, request.height)
+        guard width != streamWidth || height != streamHeight else { return }
+        streamWidth = width
+        streamHeight = height
+        display?.apply(pixelWidth: width, pixelHeight: height, hiDPI: hiDPI, refreshRate: Double(fps))
+        if mode == .mirror {
+            touchArea = DisplayArranger.fittedArea(of: captureID, width: width, height: height)
+            let injector = InputInjector(displayID: captureID, area: touchArea)
+            connection.queue.async { self.injector = injector }
+        }
+        guard let encoder = makeEncoder(width: width, height: height, bitrate: controller?.current ?? 20_000_000),
+              let json = configMessage()
+        else {
+            fail("Não foi possível reconfigurar o vídeo")
+            return
+        }
+        updateSummary()
+        // Swap the encoder and announce the new size before any frame of that size.
+        captureQueue.async {
+            self.encoder?.invalidate()
+            self.encoder = encoder
+            self.lastFrame = nil
+            self.connection.send(.config, json)
+        }
+        Task {
+            try? await capturer.update(width: width, height: height)
+            DispatchQueue.main.async {
+                guard !self.isStopped else { return }
+                self.applyArrangement()
+                self.onStatus?("Transmitindo")
+            }
+        }
+    }
+
     // MARK: - Frames (capture queue)
 
     private func captured(_ pixelBuffer: CVPixelBuffer) {
+        // Frames still at the old size right after a rotation are skipped.
+        guard let encoder, CVPixelBufferGetWidth(pixelBuffer) == encoder.width,
+              CVPixelBufferGetHeight(pixelBuffer) == encoder.height
+        else { return }
         lastFrame = pixelBuffer
         refinements = 0
         // Never queue latency: if the TCP socket is behind, skip this frame
@@ -325,7 +605,7 @@ final class StreamSession {
             return
         }
         lastEncodeTime = ProcessInfo.processInfo.systemUptime
-        encoder?.encode(pixelBuffer)
+        encoder.encode(pixelBuffer)
     }
 
     /// When the screen stops changing, re-encode the last frame a couple of
@@ -356,15 +636,18 @@ final class StreamSession {
         let frameId = nextFrameId
         if overUdp { nextFrameId &+= 1 }
         let parity = redundancy
+        let keys = videoKeys
         lock.unlock()
 
         var sent = data.count
-        if overUdp, let flow {
+        if overUdp, let flow, let keys {
             var blob = Data(capacity: 12 + data.count)
             blob.appendBE(ptsMicros)
             blob.appendBE(encodeMicros)
             blob.append(data)
-            let packets = FecPacketizer.packets(frameId: frameId, blob: blob, isKey: isKey, redundancy: parity)
+            // Encrypt the whole frame, then protect the ciphertext with FEC.
+            guard let sealed = try? keys.sealVideo(frameId: UInt64(frameId), blob) else { return }
+            let packets = FecPacketizer.packets(frameId: frameId, blob: sealed, isKey: isKey, redundancy: parity)
             sent = 0
             flow.batch {
                 for packet in packets {
@@ -409,7 +692,16 @@ final class StreamSession {
 
         flow?.cancel()
         connection.close()
+        connection.queue.async {
+            self.injector?.releaseAll()
+            self.injector = nil
+        }
         DispatchQueue.main.async {
+            if let request = self.pendingRequest {
+                self.pendingRequest = nil
+                self.onPairingFinished?(request)
+            }
+            self.marker.hide()
             self.capturer?.stop()
             self.capturer = nil
             self.captureQueue.async {
@@ -419,8 +711,10 @@ final class StreamSession {
                 self.encoder = nil
                 self.lastFrame = nil
             }
-            self.injector?.releaseAll()
-            self.injector = nil
+            Brightness.restore(self.dimmed)
+            self.dimmed = [:]
+            DisplayArranger.unmirror(self.mirrored)
+            self.mirrored = []
             self.display = nil // unplugs the virtual monitor
             self.onEnded?()
         }

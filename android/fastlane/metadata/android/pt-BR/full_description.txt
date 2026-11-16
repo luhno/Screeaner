@@ -1,0 +1,28 @@
+O Screeaner transforma seu tablet Android em um monitor secundário de verdade para o macOS, com foco em latência mínima.
+
+O app do Mac cria um display virtual do tamanho exato da tela do tablet, codifica a imagem por hardware e envia para o tablet, que decodifica e mostra cada quadro na hora. Toque, caneta, teclado e mouse do tablet voltam para o Mac.
+
+<b>Conexão</b>
+• USB: menor latência e zero jitter (via depuração USB)
+• Wi-Fi: o tablet encontra o Mac sozinho na rede local
+• Pareamento com código e conexão criptografada
+
+<b>Modos de exibição</b>
+• Extensão: mais uma área de trabalho, na posição que você escolher
+• Monitor principal: barra de menus e Dock vão para o tablet
+• Espelhar: o tablet mostra a tela do Mac
+• Só o tablet: usa apenas o tablet como tela
+
+<b>Entrada</b>
+• Caneta com pressão e inclinação
+• Gestos: rolagem com dois dedos, pinça para zoom, clique direito com dois dedos
+• Teclado e mouse ligados ao tablet controlam o Mac
+
+<b>Mais</b>
+• Áudio do Mac no tablet
+• Área de transferência compartilhada
+• Retrato e paisagem
+• Vários tablets ao mesmo tempo
+• Monitor de latência e desempenho na tela
+
+Requer o app Screeaner no Mac (macOS 13 ou mais recente), disponível no GitHub.
