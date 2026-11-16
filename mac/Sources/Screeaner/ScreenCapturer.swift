@@ -115,7 +115,7 @@ final class ScreenCapturer: NSObject, SCStreamOutput, SCStreamDelegate {
         var listSize = 0
         CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
             sampleBuffer, bufferListSizeNeededOut: &listSize, bufferListOut: nil, bufferListSize: 0,
-            blockBufferAllocator: nil, blockBufferMemoryAllocator: nil, flags: 0, blockBufferOut: nil
+            blockBufferStructureAllocator: nil, blockBufferBlockAllocator: nil, flags: 0, blockBufferOut: nil
         )
         guard listSize > 0 else { return }
         let raw = UnsafeMutableRawPointer.allocate(byteCount: listSize, alignment: MemoryLayout<AudioBufferList>.alignment)
@@ -124,7 +124,7 @@ final class ScreenCapturer: NSObject, SCStreamOutput, SCStreamDelegate {
         var block: CMBlockBuffer?
         guard CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
             sampleBuffer, bufferListSizeNeededOut: nil, bufferListOut: list, bufferListSize: listSize,
-            blockBufferAllocator: nil, blockBufferMemoryAllocator: nil,
+            blockBufferStructureAllocator: nil, blockBufferBlockAllocator: nil,
             flags: kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment, blockBufferOut: &block
         ) == noErr else { return }
 

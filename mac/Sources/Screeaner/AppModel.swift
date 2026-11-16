@@ -189,7 +189,7 @@ final class AppModel: ObservableObject {
         if ticks % 2 == 0 {
             hasScreenPermission = CGPreflightScreenCaptureAccess()
             hasInputPermission = InputInjector.hasPermission
-            let names = DisplayArranger.macScreens().map(\.name)
+            let names = DisplayArranger.macScreens().map { $0.name }
             if names != macScreenNames { macScreenNames = names }
         }
     }

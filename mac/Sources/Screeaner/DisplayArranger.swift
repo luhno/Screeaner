@@ -84,7 +84,7 @@ enum DisplayArranger {
     /// Makes every Mac screen a mirror of the tablet, so windows can only live
     /// on the tablet. Returns the screens changed.
     static func mirrorMacScreens(onto tablet: CGDirectDisplayID) -> [CGDirectDisplayID] {
-        let screens = macScreens().map(\.id)
+        let screens = macScreens().map { $0.id }
         guard !screens.isEmpty else { return [] }
         var config: CGDisplayConfigRef?
         guard CGBeginDisplayConfiguration(&config) == .success, let config else { return [] }

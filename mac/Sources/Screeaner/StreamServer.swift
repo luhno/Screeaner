@@ -159,10 +159,10 @@ final class ClientConnection {
             if let session = receiving {
                 // Once encrypted, anything else is an attack or a bug.
                 guard type == .encrypted,
-                      let (innerRaw, inner) = try? session.open(payload),
-                      let innerType = MsgType(rawValue: innerRaw)
+                      let opened = try? session.open(payload),
+                      let innerType = MsgType(rawValue: opened.0)
                 else { return false }
-                onMessage?(innerType, inner)
+                onMessage?(innerType, opened.1)
             } else {
                 guard type.isHandshake else { return false }
                 onMessage?(type, payload)
