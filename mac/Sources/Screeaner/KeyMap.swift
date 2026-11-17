@@ -68,6 +68,11 @@ enum KeyMap {
             217: 94,
             // Volume and media keys some keyboards send.
             24: 72, 25: 73, 164: 74, // VOLUME_UP, VOLUME_DOWN, VOLUME_MUTE
+            124: 114, // INSERT -> Help
+            120: 105, // SYSRQ (Print Screen) -> F13
+            116: 107, // SCROLL_LOCK -> F14
+            121: 113, // BREAK (Pause) -> F15
+            216: 93,  // YEN -> kVK_JIS_Yen
         ]
         map.merge(keypadOthers) { _, new in new }
         return map

@@ -14,6 +14,7 @@ import android.os.SystemClock
 import android.view.InputDevice
 import android.view.KeyEvent
 import android.view.MotionEvent
+import android.view.PointerIcon
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.View
@@ -109,7 +110,58 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
     private var optClipboard = true
     private var optPalm = true
     private var optSidebar = false
-    private var optCtrlIsCmd = false
+    private var cmdKey = CMD_AUTO
+    private var tabletLayout = true
+    private var cursorLocal = true
+    private var trackpadWholeMac = false
+    private var pointerSpeed = 1
+    private var reverseScroll = false
+    private lateinit var inputs: InputDeviceWatcher
+    /** A mouse or trackpad was used since one was connected. */
+    private var pointerSeen = false
+    /** This stream asked the Mac to keep its cursor out of the video. */
+    private var macCursorHidden = false
+
+    private val keyboard by lazy {
+        KeyboardBridge(object : KeyboardBridge.Output {
+            override val supportsText: Boolean get() = client?.extendedInput == true
+            override val modifierLatched: Boolean get() = shortcutBar.hasHeldKeys
+            override fun key(action: Int, keyCode: Int, isRepeat: Boolean, scanCode: Int) {
+                client?.sendKey(action, keyCode, isRepeat, scanCode)
+            }
+            override fun text(action: Int, keyCode: Int, scanCode: Int, isRepeat: Boolean, text: String) {
+                client?.sendText(action, keyCode, scanCode, isRepeat, text)
+            }
+        })
+    }
+
+    private val pointer by lazy {
+        PointerBridge(object : PointerBridge.Output {
+            override val extended: Boolean get() = client?.extendedInput == true
+            override fun touch(action: Int, x: Float, y: Float, button: Int) {
+                client?.sendTouch(action, x, y, if (action == Protocol.ACTION_HOVER) 0f else 1f, button)
+            }
+            override fun scroll(dx: Float, dy: Float, x: Float, y: Float) {
+                client?.sendScroll(dx, dy, x, y)
+            }
+            override fun zoom(phase: Int, delta: Float, x: Float, y: Float) {
+                client?.sendZoom(phase, delta, x, y)
+            }
+            override fun mouse(kind: Int, button: Int, a: Float, b: Float, x: Float, y: Float) {
+                client?.sendMouse(kind, button, a, b, x, y)
+            }
+            override fun shortcut(vararg keyCodes: Int) {
+                val current = client ?: return
+                keyCodes.forEach { current.sendKey(0, it, false) }
+                keyCodes.reversed().forEach { current.sendKey(1, it, false) }
+            }
+            override fun sawPointer() {
+                if (pointerSeen) return
+                pointerSeen = true
+                applyCursor()
+            }
+        })
+    }
     private var shortcuts: Set<String> = ShortcutBar.DEFAULT
     private var wifiLock: WifiManager.WifiLock? = null
     private lateinit var overlayScroll: ScrollView
@@ -176,6 +228,10 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
         touchSlop = ViewConfiguration.get(this).scaledTouchSlop.toFloat()
         surfaceView.setOnTouchListener { _, event -> onSurfaceTouch(event) }
         surfaceView.setOnHoverListener { view, event ->
+            // A mouse or trackpad: the Mac's cursor follows the tablet's.
+            if (pointer.onGeneric(event, max(1, view.width).toFloat(), max(1, view.height).toFloat())) {
+                return@setOnHoverListener true
+            }
             updatePen(event)
             val x = event.x / max(1, view.width)
             val y = event.y / max(1, view.height)
@@ -192,19 +248,25 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
             }
             true
         }
-        // A mouse or trackpad attached to the tablet: wheel / two-finger scroll.
+        // A mouse or trackpad attached to the tablet: wheel, buttons.
         surfaceView.setOnGenericMotionListener { view, event ->
-            if (event.actionMasked == MotionEvent.ACTION_SCROLL && event.isFromSource(InputDevice.SOURCE_CLASS_POINTER)) {
-                client?.sendScroll(
-                    -event.getAxisValue(MotionEvent.AXIS_HSCROLL) * WHEEL_STEP,
-                    event.getAxisValue(MotionEvent.AXIS_VSCROLL) * WHEEL_STEP,
-                    event.x / view.width, event.y / view.height,
-                )
-                true
-            } else {
-                false
+            when {
+                pointer.onGeneric(event, max(1, view.width).toFloat(), max(1, view.height).toFloat()) -> true
+                event.actionMasked == MotionEvent.ACTION_SCROLL && event.isFromSource(InputDevice.SOURCE_CLASS_POINTER) -> {
+                    client?.sendScroll(
+                        -event.getAxisValue(MotionEvent.AXIS_HSCROLL) * WHEEL_STEP,
+                        event.getAxisValue(MotionEvent.AXIS_VSCROLL) * WHEEL_STEP,
+                        event.x / max(1, view.width), event.y / max(1, view.height),
+                    )
+                    true
+                }
+                else -> false
             }
         }
+        // "Mac inteiro": the trackpad moves the Mac's cursor across every screen.
+        surfaceView.setOnCapturedPointerListener { _, event -> pointer.onCaptured(event) }
+        inputs = InputDeviceWatcher(applicationContext) { devices -> onInputDevicesChanged(devices) }
+        applyInputPrefs()
         surfaceView.holder.addCallback(this)
         // Android batches input to the next vsync by default; deliver every
         // touch, stylus, hover and mouse sample the moment it arrives instead.
@@ -241,23 +303,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
 
     /** A keyboard attached to the tablet types on the Mac while streaming. */
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-        val current = client
-        if (current != null && streaming && !event.isSystem) {
-            var code = event.keyCode
-            if (optCtrlIsCmd) {
-                // PC keyboards: Ctrl+C / Ctrl+V and friends behave like on the Mac.
-                code = when (code) {
-                    KeyEvent.KEYCODE_CTRL_LEFT -> KeyEvent.KEYCODE_META_LEFT
-                    KeyEvent.KEYCODE_CTRL_RIGHT -> KeyEvent.KEYCODE_META_RIGHT
-                    KeyEvent.KEYCODE_META_LEFT -> KeyEvent.KEYCODE_CTRL_LEFT
-                    KeyEvent.KEYCODE_META_RIGHT -> KeyEvent.KEYCODE_CTRL_RIGHT
-                    else -> code
-                }
-            }
-            when (event.action) {
-                KeyEvent.ACTION_DOWN -> current.sendKey(0, code, event.repeatCount > 0, event.scanCode)
-                KeyEvent.ACTION_UP -> current.sendKey(1, code, false, event.scanCode)
-            }
+        if (client != null && streaming && !event.isSystem) {
+            keyboard.handle(event)
             return true
         }
         return super.dispatchKeyEvent(event)
@@ -388,7 +435,14 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
         optClipboard = prefs.getBoolean(PREF_CLIPBOARD, true)
         optPalm = prefs.getBoolean(PREF_PALM, true)
         optSidebar = prefs.getBoolean(PREF_SIDEBAR, false)
-        optCtrlIsCmd = prefs.getBoolean(PREF_CTRL_CMD, false)
+        // 0.7 had a single "Ctrl works as ⌘" switch.
+        val legacyCtrl = if (prefs.getBoolean(PREF_CTRL_CMD, false)) CMD_CTRL else CMD_AUTO
+        cmdKey = prefs.getString(PREF_CMD_KEY, null)?.takeIf { it in CMD_VALUES } ?: legacyCtrl
+        tabletLayout = prefs.getBoolean(PREF_TABLET_LAYOUT, true)
+        cursorLocal = prefs.getBoolean(PREF_CURSOR_LOCAL, true)
+        trackpadWholeMac = prefs.getBoolean(PREF_TRACKPAD_MAC, false)
+        pointerSpeed = prefs.getInt(PREF_POINTER_SPEED, 1).coerceIn(0, POINTER_SPEEDS.size - 1)
+        reverseScroll = prefs.getBoolean(PREF_REVERSE_SCROLL, false)
         shortcuts = prefs.getStringSet(PREF_SHORTCUTS, null)?.toSet() ?: ShortcutBar.DEFAULT
     }
 
@@ -439,7 +493,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
     }
 
     private fun showOptions() {
-        val values = booleanArrayOf(optAudio, optClipboard, optPalm, optSidebar, optCtrlIsCmd)
+        val values = booleanArrayOf(optAudio, optClipboard, optPalm, optSidebar)
         AlertDialog.Builder(this)
             .setTitle(R.string.options_title)
             .setMultiChoiceItems(R.array.option_labels, values) { _, index, checked -> values[index] = checked }
@@ -449,20 +503,133 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
                 optClipboard = values[1]
                 optPalm = values[2]
                 optSidebar = values[3]
-                optCtrlIsCmd = values[4]
                 prefs.edit()
                     .putBoolean(PREF_AUDIO, optAudio).putBoolean(PREF_CLIPBOARD, optClipboard)
                     .putBoolean(PREF_PALM, optPalm).putBoolean(PREF_SIDEBAR, optSidebar)
-                    .putBoolean(PREF_CTRL_CMD, optCtrlIsCmd)
                     .apply()
                 applySidebar()
                 // Audio and clipboard are agreed when connecting.
                 if (reconnect) reconnect()
             }
-            .setNeutralButton(R.string.options_shortcuts) { _, _ -> showShortcuts() }
+            .setNeutralButton(R.string.options_input) { _, _ -> showInputOptions() }
             .setNegativeButton(R.string.options_forget) { _, _ -> confirmForget() }
             .show()
     }
+
+    // region Keyboard, mouse and trackpad
+
+    private fun onInputDevicesChanged(devices: InputDeviceWatcher.Devices) {
+        if (!devices.hasPointer) pointerSeen = false
+        applyInputPrefs()
+        if (devices.keyboard != null || devices.hasPointer) {
+            Toast.makeText(this, getString(R.string.input_connected, describeInputs(devices)), Toast.LENGTH_LONG).show()
+        }
+    }
+
+    /** "Teclado K380 (Ctrl = ⌘) · Trackpad …" */
+    private fun describeInputs(devices: InputDeviceWatcher.Devices = inputs.devices): String {
+        val parts = ArrayList<String>()
+        devices.keyboard?.let {
+            parts += getString(R.string.input_keyboard, it.name, getString(if (keyboard.swapCtrlCmd) R.string.cmd_is_ctrl else R.string.cmd_is_cmd))
+        }
+        devices.touchpad?.let { parts += getString(R.string.input_touchpad, it.name) }
+        devices.mouse?.let { parts += getString(R.string.input_mouse, it.name) }
+        return if (parts.isEmpty()) getString(R.string.input_none) else parts.joinToString(" · ")
+    }
+
+    private fun applyInputPrefs() {
+        keyboard.swapCtrlCmd = when (cmdKey) {
+            CMD_CTRL -> true
+            CMD_META -> false
+            else -> !inputs.devices.keyboardIsApple // PC keyboards: Android keeps the Windows key for itself
+        }
+        keyboard.tabletLayout = tabletLayout
+        pointer.speed = POINTER_SPEEDS[pointerSpeed]
+        pointer.reverseScroll = reverseScroll
+        applyCursor()
+        applyPointerCapture()
+    }
+
+    /**
+     * One cursor only. Instant (default): Android draws it with no stream latency and
+     * the Mac keeps its own out of the video. Otherwise the Mac's, which shows its shapes.
+     */
+    private fun applyCursor() {
+        surfaceView.pointerIcon = if (cursorLocal) null else PointerIcon.getSystemIcon(this, PointerIcon.TYPE_NULL)
+        val current = client ?: return
+        if (!streaming || !current.extendedInput) return
+        val hideMac = cursorLocal && pointerSeen && !surfaceView.hasPointerCapture()
+        if (hideMac != macCursorHidden) {
+            current.sendMouse(Protocol.MOUSE_CURSOR, if (hideMac) 0 else 1, 0f, 0f)
+            macCursorHidden = hideMac
+        }
+    }
+
+    private fun applyPointerCapture() {
+        val want = streaming && trackpadWholeMac && inputs.devices.hasPointer &&
+            client?.extendedInput == true && hasWindowFocus()
+        if (want && !surfaceView.hasPointerCapture()) {
+            surfaceView.isFocusableInTouchMode = true
+            surfaceView.requestFocus()
+            surfaceView.requestPointerCapture()
+        } else if (!want && surfaceView.hasPointerCapture()) {
+            surfaceView.releasePointerCapture()
+        }
+    }
+
+    override fun onPointerCaptureChanged(hasCapture: Boolean) {
+        super.onPointerCaptureChanged(hasCapture)
+        if (!hasCapture) pointer.releaseAll()
+        applyCursor()
+    }
+
+    private fun showInputOptions() {
+        val speeds = resources.getStringArray(R.array.pointer_speeds)
+        val cmdLabel = when (cmdKey) {
+            CMD_CTRL -> getString(R.string.cmd_ctrl)
+            CMD_META -> getString(R.string.cmd_meta)
+            else -> getString(R.string.cmd_auto, getString(if (keyboard.swapCtrlCmd) R.string.cmd_is_ctrl else R.string.cmd_is_cmd))
+        }
+        val items = arrayOf(
+            describeInputs(),
+            getString(R.string.input_cmd, cmdLabel),
+            getString(R.string.input_chars, getString(if (tabletLayout) R.string.chars_tablet else R.string.chars_mac)),
+            getString(R.string.input_cursor, getString(if (cursorLocal) R.string.cursor_local else R.string.cursor_mac)),
+            getString(R.string.input_trackpad, getString(if (trackpadWholeMac) R.string.trackpad_mac else R.string.trackpad_screen)),
+            getString(R.string.input_speed, speeds[pointerSpeed]),
+            getString(R.string.input_scroll, getString(if (reverseScroll) R.string.scroll_reverse else R.string.scroll_natural)),
+            getString(R.string.options_shortcuts),
+        )
+        if (streaming && client?.extendedInput == false) showNotice(getString(R.string.input_old_mac))
+        AlertDialog.Builder(this)
+            .setTitle(R.string.input_title)
+            .setItems(items) { _, which ->
+                when (which) {
+                    1 -> cmdKey = CMD_VALUES[(CMD_VALUES.indexOf(cmdKey) + 1) % CMD_VALUES.size]
+                    2 -> tabletLayout = !tabletLayout
+                    3 -> cursorLocal = !cursorLocal
+                    4 -> trackpadWholeMac = !trackpadWholeMac
+                    5 -> pointerSpeed = (pointerSpeed + 1) % POINTER_SPEEDS.size
+                    6 -> reverseScroll = !reverseScroll
+                    7 -> {
+                        showShortcuts()
+                        return@setItems
+                    }
+                }
+                prefs.edit()
+                    .putString(PREF_CMD_KEY, cmdKey).putBoolean(PREF_TABLET_LAYOUT, tabletLayout)
+                    .putBoolean(PREF_CURSOR_LOCAL, cursorLocal).putBoolean(PREF_TRACKPAD_MAC, trackpadWholeMac)
+                    .putInt(PREF_POINTER_SPEED, pointerSpeed).putBoolean(PREF_REVERSE_SCROLL, reverseScroll)
+                    .apply()
+                keyboard.reset()
+                applyInputPrefs()
+                showInputOptions() // stays open, showing the new values
+            }
+            .setPositiveButton(R.string.ok, null)
+            .show()
+    }
+
+    // endregion
 
     private fun showShortcuts() {
         val all = ShortcutBar.ALL
@@ -900,17 +1067,21 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
         enterImmersive()
         discovery.start()
         clipboardBridge.start()
+        inputs.start()
     }
 
     override fun onPause() {
         super.onPause()
         discovery.stop()
         clipboardBridge.stop()
+        inputs.stop()
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus) enterImmersive()
+        // A dialog took the trackpad back; take it again.
+        applyPointerCapture()
     }
 
     private fun enterImmersive() {
@@ -1054,6 +1225,13 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
             }
             // A late callback from a client stopped in surfaceDestroyed must not re-take the lock.
             holdWifi(streaming && client != null)
+            if (!streaming) {
+                pointer.releaseAll()
+                keyboard.reset()
+                macCursorHidden = false // a new stream starts with the Mac's cursor drawn
+            }
+            applyCursor()
+            applyPointerCapture()
             when (state) {
                 StreamClient.State.STREAMING -> {
                     overlay.visibility = View.GONE
@@ -1317,6 +1495,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
     }
 
     private fun onSurfaceTouch(event: MotionEvent): Boolean {
+        // Mice and trackpads click at once and have their own gestures.
+        if (pointer.onTouch(event, surfaceWidth(), surfaceHeight())) return true
         if (event.actionMasked == MotionEvent.ACTION_DOWN && isPalm(event)) ignoringPalm = true
         if (ignoringPalm) {
             // The resting hand is ignored, but a pen that lands next to it still draws.
@@ -1457,6 +1637,17 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
         const val PREF_PALM = "optPalm"
         const val PREF_SIDEBAR = "optSidebar"
         const val PREF_CTRL_CMD = "optCtrlIsCmd"
+        const val PREF_CMD_KEY = "cmdKey"
+        const val PREF_TABLET_LAYOUT = "tabletLayout"
+        const val PREF_CURSOR_LOCAL = "cursorLocal"
+        const val PREF_TRACKPAD_MAC = "trackpadWholeMac"
+        const val PREF_POINTER_SPEED = "pointerSpeed"
+        const val PREF_REVERSE_SCROLL = "reverseScroll"
+        const val CMD_AUTO = "auto"
+        const val CMD_CTRL = "ctrl"
+        const val CMD_META = "meta"
+        val CMD_VALUES = listOf(CMD_AUTO, CMD_CTRL, CMD_META)
+        val POINTER_SPEEDS = floatArrayOf(0.7f, 1f, 1.4f)
         const val PREF_SHORTCUTS = "shortcuts"
         const val PALM_WINDOW_MS = 600L
         const val PREF_MODE = "displayMode"

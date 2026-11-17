@@ -47,7 +47,7 @@
     <string name="option_usb_detail">Depuração USB ligada e o cabo conectado. Menor latência, zero oscilação.</string>
     <string name="option_wifi">Wi‑Fi</string>
     <string name="option_wifi_detail">Mesma rede do Mac. Ele aparece sozinho; prefira 5 GHz ou Wi‑Fi 6.</string>
-    <string name="footer_gestures">Dois dedos: rolar · pinça: zoom · toque com dois dedos: clique direito · três dedos: monitor</string>
+    <string name="footer_gestures">Dois dedos: rolar · pinça: zoom · toque com dois dedos: clique direito · três dedos: monitor · teclado e trackpad: Opções</string>
     <string name="encoder_normal">%1$s · encoder normal: cerca de 1 quadro a mais de atraso</string>
     <string name="status_pairing">Pareando com %1$s…</string>
     <string name="pairing_confirm">O código é o mesmo</string>
@@ -61,9 +61,40 @@
         <item>Compartilhar área de transferência (texto)</item>
         <item>Ignorar a palma da mão ao usar a caneta</item>
         <item>Barra de atalhos na lateral</item>
-        <item>Ctrl do teclado funciona como ⌘</item>
     </string-array>
-    <string name="options_shortcuts">Atalhos…</string>
+    <string name="options_input">Teclado e trackpad…</string>
+    <string name="options_shortcuts">Botões da barra de atalhos…</string>
+    <string name="input_title">Teclado, trackpad e mouse</string>
+    <string name="input_none">Nenhum teclado, mouse ou trackpad conectado ao tablet</string>
+    <string name="input_keyboard">Teclado %1$s (%2$s)</string>
+    <string name="input_touchpad">Trackpad %1$s</string>
+    <string name="input_mouse">Mouse %1$s</string>
+    <string name="input_connected">%1$s · ajustado para o Mac</string>
+    <string name="input_cmd">Tecla ⌘ do Mac: %1$s</string>
+    <string name="cmd_auto">automática · %1$s</string>
+    <string name="cmd_ctrl">Ctrl do teclado</string>
+    <string name="cmd_meta">tecla ⌘ / Windows do teclado</string>
+    <string name="cmd_is_ctrl">Ctrl = ⌘</string>
+    <string name="cmd_is_cmd">⌘ = ⌘</string>
+    <string name="input_chars">Letras e acentos: %1$s</string>
+    <string name="chars_tablet">layout do tablet (o que está nas teclas)</string>
+    <string name="chars_mac">layout do Mac</string>
+    <string name="input_cursor">Cursor: %1$s</string>
+    <string name="cursor_local">instantâneo, desenhado no tablet</string>
+    <string name="cursor_mac">o do Mac, no vídeo (com os formatos do Mac)</string>
+    <string name="input_trackpad">Trackpad e mouse: %1$s</string>
+    <string name="trackpad_screen">na tela do tablet</string>
+    <string name="trackpad_mac">controlam o Mac inteiro, todas as telas</string>
+    <string name="input_speed">Velocidade no Mac inteiro: %1$s</string>
+    <string-array name="pointer_speeds">
+        <item>lenta</item>
+        <item>normal</item>
+        <item>rápida</item>
+    </string-array>
+    <string name="input_scroll">Rolagem do trackpad: %1$s</string>
+    <string name="scroll_natural">natural (o conteúdo segue os dedos)</string>
+    <string name="scroll_reverse">invertida</string>
+    <string name="input_old_mac">Atualize o Screeaner no Mac para a 0.8: com ele o layout do tablet, o cursor instantâneo e o trackpad no Mac inteiro funcionam.</string>
     <string name="options_forget">Esquecer Macs</string>
     <string name="shortcuts_title">Botões da barra de atalhos</string>
     <string-array name="shortcut_labels">

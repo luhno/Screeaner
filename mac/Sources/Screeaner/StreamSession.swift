@@ -110,6 +110,8 @@ final class StreamSession {
     /// Main queue. Whether the tablet asked for the shared clipboard (the menu setting is applied live on top).
     private var tabletWantsClipboard = false
     private var capturer: ScreenCapturer?
+    /// Main queue. Whether the Mac's cursor is drawn into the video (see `setCursorShown`).
+    private var cursorShown = true
     private var controller: BitrateController?
     private var adaptive = true
     private var pendingRequest: UUID?
@@ -418,6 +420,33 @@ final class StreamSession {
                 scanCode: payload.count >= 6 ? Int(payload.readBE(UInt16.self, at: 4)) : 0,
                 isRepeat: payload[first + 3] & 1 != 0
             )
+        case .text:
+            guard payload.count > 6,
+                  let text = String(data: payload.dropFirst(6), encoding: .utf8)
+            else { return }
+            injector?.text(
+                action: payload[first],
+                androidKeyCode: Int(payload.readBE(UInt16.self, at: 1)),
+                scanCode: Int(payload.readBE(UInt16.self, at: 3)),
+                text: text,
+                isRepeat: payload[first + 5] & 1 != 0
+            )
+        case .mouse:
+            guard payload.count >= 18, let kind = MouseKind(rawValue: payload[first]) else { return }
+            let button = payload[first + 1]
+            let a = payload.readFloat(at: 2)
+            let b = payload.readFloat(at: 6)
+            let x = payload.readFloat(at: 10)
+            let y = payload.readFloat(at: 14)
+            switch kind {
+            case .move: injector?.moveRelative(dx: a, dy: b)
+            case .down: injector?.button(down: true, button: button, x: x, y: y)
+            case .up: injector?.button(down: false, button: button, x: x, y: y)
+            case .wheel: injector?.wheel(dx: a, dy: b, x: x, y: y)
+            case .scroll: injector?.scrollPoints(dx: a, dy: b, x: x, y: y)
+            case .zoom: injector?.zoom(phase: button, delta: a, x: x, y: y)
+            case .cursor: DispatchQueue.main.async { self.setCursorShown(button != 0) }
+            }
         case .keyframeRequest:
             sendKeyframeNow()
         case .ping:
@@ -453,6 +482,15 @@ final class StreamSession {
         default:
             break
         }
+    }
+
+    /// Main queue. The tablet draws its own cursor for its mouse or trackpad (no stream
+    /// latency); the Mac's cursor then stays out of the video so there are not two.
+    private func setCursorShown(_ shown: Bool) {
+        guard cursorShown != shown else { return }
+        cursorShown = shown
+        guard let capturer else { return }
+        Task { try? await capturer.setShowsCursor(shown) }
     }
 
     private func sendKeyframeNow() {
@@ -638,6 +676,7 @@ final class StreamSession {
         if let json = configMessage() { connection.send(.config, json) }
 
         let capturer = ScreenCapturer(queue: captureQueue)
+        capturer.showsCursor = cursorShown
         capturer.onFrame = { [weak self] pixelBuffer in self?.captured(pixelBuffer) }
         capturer.onAudio = { [weak self] pcm in self?.connection.send(.audio, pcm) }
         capturer.onStop = { [weak self] error in

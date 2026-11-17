@@ -120,6 +120,9 @@ class StreamClient(
     @Volatile private var running = true
     @Volatile var isStreaming = false
         private set
+    /** The Mac takes MOUSE and TEXT messages (0.8+); older ones would drop the connection. */
+    @Volatile var extendedInput = false
+        private set
     @Volatile private var socket: Socket? = null
     /** The socket being connected right now, so stop() can abort the attempt. */
     @Volatile private var attemptSocket: Socket? = null
@@ -213,6 +216,25 @@ class StreamClient(
             .put(action.toByte()).putShort(keyCode.toShort()).put((if (isRepeat) 1 else 0).toByte())
             .putShort(scanCode.toShort())
         queue(Protocol.KEY, payload.array())
+    }
+
+    /** See Protocol.MOUSE_*; x/y NaN = at the Mac's cursor. */
+    fun sendMouse(kind: Int, button: Int, a: Float, b: Float, x: Float = Float.NaN, y: Float = Float.NaN) {
+        if (!isStreaming || !extendedInput) return
+        val payload = ByteBuffer.allocate(18)
+            .put(kind.toByte()).put(button.toByte()).putFloat(a).putFloat(b).putFloat(x).putFloat(y)
+        queue(Protocol.MOUSE, payload.array())
+    }
+
+    /** Characters typed with the tablet's keyboard layout (see KeyboardBridge). */
+    fun sendText(action: Int, keyCode: Int, scanCode: Int, isRepeat: Boolean, text: String) {
+        if (!isStreaming || !extendedInput) return
+        val bytes = text.toByteArray(Charsets.UTF_8)
+        if (bytes.isEmpty() || bytes.size > 64) return
+        val payload = ByteBuffer.allocate(6 + bytes.size)
+            .put(action.toByte()).putShort(keyCode.toShort()).putShort(scanCode.toShort())
+            .put((if (isRepeat) 1 else 0).toByte()).put(bytes)
+        queue(Protocol.TEXT, payload.array())
     }
 
     fun sendClipboard(text: String) {
@@ -338,6 +360,7 @@ class StreamClient(
                 if (running) Log.w(TAG, "Session ended", e)
             } finally {
                 isStreaming = false
+                extendedInput = false
                 latencyTest?.cancel()
                 secure = null
                 closeQuietly(connected)
@@ -499,6 +522,7 @@ class StreamClient(
                             frameCap = if (json.has("frameCap")) json.getBoolean("frameCap") else null,
                         )
                         streamInfo = info
+                        extendedInput = versionAtLeast(info.macVersion, 0, 8)
                         // A second CONFIG means the size changed (rotation): new decoder, same connection.
                         decoder?.release()
                         decoder = VideoDecoder(info.codec, info.width, info.height, info.fps, surface).also {
@@ -815,6 +839,13 @@ class StreamClient(
             }
         }
         .toString()
+
+    /** "0.8.1" >= 0.8? Unknown versions count as old. */
+    private fun versionAtLeast(version: String, major: Int, minor: Int): Boolean {
+        val parts = version.substringBefore(' ').split('.').map { it.toIntOrNull() ?: return false }
+        val got = parts.getOrElse(0) { 0 } * 1000 + parts.getOrElse(1) { 0 }
+        return got >= major * 1000 + minor
+    }
 
     private fun pause(millis: Long) {
         try {

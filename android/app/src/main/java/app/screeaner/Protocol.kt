@@ -30,6 +30,8 @@ object Protocol {
     const val RESIZE = 17           // tablet -> mac, JSON {width, height}
     const val CLIPBOARD = 18        // both ways, UTF-8 text
     const val AUDIO = 19            // mac -> tablet, PCM s16le stereo 48 kHz
+    const val MOUSE = 27            // tablet -> mac, [kind u8][button u8][a f32][b f32][x f32][y f32] (Mac 0.8+)
+    const val TEXT = 28             // tablet -> mac, [action u8][keyCode u16][scanCode u16][flags u8][UTF-8] (Mac 0.8+)
 
     const val SEC_HELLO = 20
     const val SEC_SERVER = 21
@@ -70,4 +72,14 @@ object Protocol {
 
     const val BUTTON_LEFT = 0
     const val BUTTON_RIGHT = 1
+    const val BUTTON_MIDDLE = 2
+
+    // MOUSE kinds; x/y NaN = at the Mac's cursor.
+    const val MOUSE_MOVE = 0        // a, b: relative movement in points
+    const val MOUSE_DOWN = 1        // button
+    const val MOUSE_UP = 2
+    const val MOUSE_WHEEL = 3       // a, b: lines, positive = left / up
+    const val MOUSE_SCROLL = 4      // a, b: points, content follows the fingers
+    const val MOUSE_ZOOM = 5        // button: ZOOM_* phase, a: relative change
+    const val MOUSE_CURSOR = 6      // button: 1 draw the Mac's cursor in the video, 0 hide it
 }

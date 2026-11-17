@@ -86,7 +86,15 @@ Cada push também gera o APK e o `.app` como artefatos do GitHub Actions (workfl
 | Girar o tablet | Alterna entre paisagem e retrato **sem reconectar**: o display muda de resolução no lugar |
 | Voltar duas vezes | Encerra a transmissão (um toque só avisa, para não sair sem querer) |
 
-**Teclado e mouse do tablet** — um teclado físico (USB ou Bluetooth) ligado ao tablet digita no Mac enquanto a transmissão está ativa, incluindo modificadores (a tecla Meta/Windows vira ⌘), atalhos e o teclado numérico. Teclados **ABNT2** funcionam com o layout *Brasileiro* do Mac, incluindo ç, acentos e as teclas extras `\ |` e `/ ?`. Em teclados de PC, a opção *Ctrl do teclado funciona como ⌘* deixa Ctrl+C/Ctrl+V como no Mac. Um mouse ou trackpad ligado ao tablet também controla o cursor, com botão direito e rolagem. Atalhos que o próprio Android intercepta (por exemplo Meta+Tab) não chegam ao Mac.
+**Teclado, mouse e trackpad do tablet** — o tablet reconhece sozinho o que está ligado a ele (USB, Bluetooth ou capa‑teclado), avisa e se ajusta. *Opções › Teclado e trackpad…* mostra o que foi detectado e os ajustes:
+
+- **Letras e acentos com o layout do tablet** (padrão): o que está impresso nas teclas é o que aparece no Mac, qualquer que seja a fonte de entrada do Mac — ABNT2 com ç, acentos (´ ~ ^ ` ¨) e AltGr, AZERTY, QWERTZ… Atalhos (com ⌘, Ctrl ou Option) e teclas especiais continuam indo como teclas de verdade. A alternativa *layout do Mac* manda só as posições das teclas.
+- **Tecla ⌘ automática**: em teclados de PC o Ctrl vira ⌘ (Ctrl+C, Ctrl+V, Ctrl+Tab troca de app), porque o Android guarda a tecla Windows/Meta para ele; em teclados Apple o ⌘ continua ⌘. Dá para fixar qualquer uma das duas.
+- **Mouse e trackpad na tela do tablet** (padrão): o cursor do Mac segue o do tablet, o clique é imediato, há botão direito e do meio, a roda rola em linhas como no Mac, e no Android 14+ os gestos do trackpad viram gestos do Mac — dois dedos rolam, pinça dá zoom, três dedos abrem o Mission Control (para cima), o App Exposé (para baixo) ou trocam de Space (para os lados).
+- **Cursor instantâneo** (padrão): com um mouse ou trackpad em uso, o tablet desenha o cursor na hora, sem a latência do vídeo, e o Mac deixa o dele fora do vídeo — um cursor só. A alternativa *o do Mac* mostra os formatos do Mac (I de texto, mãozinha) com o atraso do vídeo.
+- **Trackpad no Mac inteiro** (opcional): o tablet captura o trackpad e move o cursor do Mac de forma relativa, por todas as telas do Mac, com toque para clicar, dois dedos (rolar, pinça, toque = botão direito), três dedos (toque = botão do meio, deslizar = Mission Control e Spaces), velocidade ajustável e rolagem natural ou invertida.
+
+Atalhos que o próprio Android intercepta (Alt+Tab, Meta+qualquer tecla, às vezes Ctrl+Espaço) não chegam ao Mac; a barra de atalhos cobre os principais.
 
 **Barra de atalhos** — em *Opções*, ative a barra lateral com botões do Mac: ⌘ ⌥ ⌃ ⇧ fixos (toque em ⌘ e depois clique = ⌘‑clique), desfazer, refazer, copiar, colar, Esc e outros. *Opções › Atalhos…* escolhe quais botões aparecem.
 
@@ -170,7 +178,7 @@ No painel completo, **● Gravar sessão de teste** grava uma linha por segundo 
 
 ### Versão do app
 
-A versão aparece no rodapé da tela de conexão e no título do painel do tablet (`Screeaner v0.7.2 (9) · Android … · modelo`), e no rodapé do menu do Mac. Cada lado também mostra a versão do outro: o menu do Mac lista a versão do app de cada tablet, e as sessões gravadas registram a versão do Mac.
+A versão aparece no rodapé da tela de conexão e no título do painel do tablet (`Screeaner v0.8.0 (10) · Android … · modelo`), e no rodapé do menu do Mac. Cada lado também mostra a versão do outro: o menu do Mac lista a versão do app de cada tablet, e as sessões gravadas registram a versão do Mac.
 
 ## Atualizações (sem Google Play nem App Store)
 
@@ -265,6 +273,8 @@ Mudar um ajuste reinicia a transmissão automaticamente.
 | 17 `RESIZE` | tablet → Mac | JSON `width`, `height` (rotação) |
 | 18 `CLIPBOARD` | tablet ⇄ Mac | texto UTF‑8 |
 | 19 `AUDIO` | Mac → tablet | PCM s16le estéreo 48 kHz |
+| 27 `MOUSE` | tablet → Mac | `kind u8` (0 mover relativo, 1 botão desce, 2 botão sobe, 3 roda em linhas, 4 rolagem em pontos, 5 zoom, 6 cursor do Mac no vídeo) · `button u8` (botão 0/1/2, fase do zoom, ou 1/0 mostrar/esconder) · `a f32` · `b f32` · `x f32` · `y f32` (NaN = onde está o cursor). Mac 0.8+ |
+| 28 `TEXT` | tablet → Mac | `action u8` · `androidKeyCode u16` · `scanCode u16` · `flags u8` · texto UTF‑8 já com o layout do tablet. Mac 0.8+ |
 
 Coordenadas são normalizadas (0–1) em relação à tela do tablet.
 

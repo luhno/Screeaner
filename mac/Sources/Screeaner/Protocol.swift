@@ -14,7 +14,7 @@ enum Proto {
     /// First four bytes ("SCRN") of the datagram the tablet sends to open the UDP path.
     static let udpMagic: UInt32 = 0x5343_524E
     /// Shown in the menu and sent to the tablet (which logs it in test sessions).
-    static let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.7.2"
+    static let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.8.0"
 
     /// The host clock in microseconds: frame timestamps, pongs and probe acks all use it.
     static func hostClockMicros() -> UInt64 {
@@ -42,6 +42,8 @@ enum MsgType: UInt8 {
     case resize = 17          // tablet -> mac, JSON {width, height}: rotation without reconnecting
     case clipboard = 18       // both ways, UTF-8 text
     case audio = 19           // mac -> tablet, PCM s16le stereo 48 kHz
+    case mouse = 27           // tablet -> mac, [kind u8][button u8][a f32][b f32][x f32][y f32] (see MouseKind)
+    case text = 28            // tablet -> mac, [action u8][androidKeyCode u16][scanCode u16][flags u8][UTF-8 text]
 
     case secHello = 20        // tablet -> mac, pairing handshake (see SecureChannel)
     case secServer = 21       // mac -> tablet
@@ -53,6 +55,18 @@ enum MsgType: UInt8 {
 
     /// Messages that may travel in the clear (before the channel is established).
     var isHandshake: Bool { rawValue >= 20 && rawValue <= 25 }
+}
+
+/// What a `.mouse` message carries. x/y are normalized tablet positions, or NaN for
+/// "at the Mac's cursor" (a trackpad captured by the tablet drives the whole Mac).
+enum MouseKind: UInt8 {
+    case move = 0       // a, b: relative movement in points
+    case down = 1       // button: 0 left, 1 right, 2 middle
+    case up = 2
+    case wheel = 3      // a, b: lines (fractional for high-resolution wheels), positive = up / left
+    case scroll = 4     // a, b: points, content follows the fingers
+    case zoom = 5       // button: phase (0 begin, 1 change, 2 end), a: relative change
+    case cursor = 6     // button: 1 draw the Mac's cursor in the video, 0 hide it (the tablet draws its own)
 }
 
 struct Hello: Decodable {

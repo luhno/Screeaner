@@ -27,6 +27,10 @@ final class ScreenCapturer: NSObject, SCStreamOutput, SCStreamDelegate {
         return cancelled
     }
 
+    /// Whether the Mac's cursor is drawn into the video. Off while the tablet draws its
+    /// own cursor for a mouse or trackpad (instant, no stream latency). Set before `start`.
+    var showsCursor = true
+
     /// Called on `queue` for every frame whose content actually changed.
     var onFrame: ((CVPixelBuffer) -> Void)?
     /// System audio as interleaved 16-bit stereo at 48 kHz, when requested.
@@ -54,7 +58,7 @@ final class ScreenCapturer: NSObject, SCStreamOutput, SCStreamDelegate {
         config.height = height
         config.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(fps))
         config.pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
-        config.showsCursor = true
+        config.showsCursor = showsCursor
         config.colorSpaceName = CGColorSpace.sRGB
         // Size of the surface pool, not a latency buffer. We keep one frame
         // around for keyframe re-sends and the encoder may hold another.
@@ -97,6 +101,18 @@ final class ScreenCapturer: NSObject, SCStreamOutput, SCStreamDelegate {
         guard let stream, let config else { return }
         config.width = width
         config.height = height
+        try await stream.updateConfiguration(config)
+    }
+
+    /// Shows or hides the Mac's cursor in the video without restarting the capture.
+    func setShowsCursor(_ shows: Bool) async throws {
+        lock.lock()
+        showsCursor = shows
+        let stream = self.stream
+        let config = configuration
+        lock.unlock()
+        guard let stream, let config, config.showsCursor != shows else { return }
+        config.showsCursor = shows
         try await stream.updateConfiguration(config)
     }
 
