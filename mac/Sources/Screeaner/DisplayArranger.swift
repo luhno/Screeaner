@@ -65,11 +65,18 @@ enum DisplayArranger {
     }
 
     /// The Mac's own screens (not tablets), with their names for the menu.
+    /// Two monitors of the same model get "Nome (2)", so each one can be picked.
     static func macScreens() -> [(id: CGDirectDisplayID, name: String)] {
-        activeDisplays().filter { !isTablet($0) }.map { id in
-            let screen = NSScreen.screens.first { $0.displayID == id }
-            return (id, screen?.localizedName ?? "Tela \(id)")
-        }
+        var seen: [String: Int] = [:]
+        return activeDisplays().filter { !isTablet($0) }
+            .sorted { CGDisplayBounds($0).minX < CGDisplayBounds($1).minX }
+            .map { id in
+                let screen = NSScreen.screens.first { $0.displayID == id }
+                let base = screen?.localizedName ?? "Tela \(id)"
+                let count = (seen[base] ?? 0) + 1
+                seen[base] = count
+                return (id, count == 1 ? base : "\(base) (\(count))")
+            }
     }
 
     /// Screen shown by the mirror mode: the one picked in the menu, else the Mac's main screen.

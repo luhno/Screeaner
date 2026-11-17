@@ -9,7 +9,7 @@ final class PairingPanel {
     func show(model: AppModel) {
         if panel == nil {
             let panel = NSPanel(
-                contentRect: NSRect(x: 0, y: 0, width: 360, height: 220),
+                contentRect: NSRect(x: 0, y: 0, width: 380, height: 300),
                 styleMask: [.titled, .nonactivatingPanel, .utilityWindow],
                 backing: .buffered, defer: false
             )
@@ -17,12 +17,14 @@ final class PairingPanel {
             panel.level = .floating
             panel.isReleasedWhenClosed = false
             panel.hidesOnDeactivate = false
+            panel.appearance = NSAppearance(named: .darkAqua)
             panel.contentView = NSHostingView(rootView: PairingView(model: model))
             panel.center()
             self.panel = panel
         }
-        NSApp.activate(ignoringOtherApps: true)
-        panel?.makeKeyAndOrderFront(nil)
+        // Shown on top without taking the keyboard: a Return typed in another
+        // app must never answer a pairing request.
+        panel?.orderFrontRegardless()
     }
 
     func hide() {
@@ -34,40 +36,61 @@ struct PairingView: View {
     @ObservedObject var model: AppModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 18) {
             ForEach(model.pairingRequests) { request in
-                PairingRequestView(request: request) { allowed in
-                    model.respond(to: request, allowed: allowed)
+                PairingRequestView(request: request) { decision in
+                    model.respond(to: request, decision: decision)
                 }
             }
         }
-        .padding(18)
-        .frame(width: 360)
+        .padding(20)
+        .frame(width: 380)
+        .background(Dot.canvas)
+        .foregroundStyle(Dot.ink)
+        .environment(\.colorScheme, .dark)
     }
 }
 
+/// "Tablet X wants to use this Mac", the six-digit code, a favorite switch and Allow / Refuse.
 struct PairingRequestView: View {
     let request: PairingRequest
-    let decide: (Bool) -> Void
+    let decide: (PairingDecision) -> Void
+    @State private var favorite = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("\(request.name) quer usar este Mac como monitor")
-                .font(.headline)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 6) {
+                DotMarker(color: Dot.signal)
+                DotLabel(text: request.known ? "Conexão" : "Pareamento")
+            }
+            Text(request.known
+                 ? "\(request.name) quer conectar"
+                 : "\(request.name) quer usar este Mac como monitor")
+                .font(Dot.text(14, .semibold))
                 .fixedSize(horizontal: false, vertical: true)
+            if request.known {
+                Text("Ele já é autorizado, mas só os tablets com ★ conectam sozinhos.")
+                    .font(Dot.text(12)).foregroundStyle(Dot.inkSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             Text("Confira se o tablet mostra o mesmo código:")
-                .font(.callout).foregroundStyle(.secondary)
+                .font(Dot.text(12)).foregroundStyle(Dot.inkSecondary)
             Text(PairingRequestView.format(request.code))
-                .font(.system(size: 34, weight: .semibold, design: .monospaced))
+                .font(Dot.display(40))
+                .tracking(2)
                 .textSelection(.enabled)
             Text("Ao permitir, o tablet poderá ver a tela e controlar o mouse e o teclado deste Mac.")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(Dot.text(11.5)).foregroundStyle(Dot.inkSecondary)
                 .fixedSize(horizontal: false, vertical: true)
+            Toggle("★ Favorito: conecta sozinho, sem código", isOn: $favorite)
+                .toggleStyle(DotToggleStyle())
+                .padding(.vertical, 4)
             HStack {
-                Button("Recusar", role: .cancel) { decide(false) }
+                Button("Recusar") { decide(.refuse) }.buttonStyle(DotButtonStyle())
                 Spacer()
-                Button("Permitir") { decide(true) }
-                    .keyboardShortcut(.defaultAction)
+                // Deliberately no default (Return) shortcut: allowing must be a click.
+                Button("Permitir") { decide(favorite ? .allowFavorite : .allow) }
+                    .buttonStyle(DotButtonStyle(primary: true))
             }
         }
     }

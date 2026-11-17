@@ -1,0 +1,4 @@
+0.7.2
+• Favorite mode: star a tablet on the Mac and it connects by itself, no code
+• With favorites set, other tablets need approval on the Mac
+• A favorite tablet reconnects faster over Wi-Fi, without waiting for discovery

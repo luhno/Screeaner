@@ -44,6 +44,57 @@ Na primeira conexão de cada tablet, **o Mac e o tablet mostram o mesmo código 
 - O código protege contra intermediários: ele é derivado das chaves dos dois lados, com um compromisso que impede um atacante de escolher chaves que gerem o mesmo número.
 - No menu do Mac, **Tablets autorizados** lista os tablets pareados e permite remover cada um. No tablet, *Opções › Esquecer Macs* faz o inverso.
 
+### Atualização automática pelo GitHub
+
+Os dois apps se mantêm atualizados sozinhos a partir dos [Releases](https://github.com/luhno/Screeaner/releases).
+
+**Mac** (ajuste *Atualizar sozinho pelo GitHub*, ligado por padrão)
+- **Quando procura:** pouco depois de abrir e a cada 6 horas.
+- **Conferência:** baixa o `Screeaner-mac.zip` novo e confere duas vezes. Primeiro, o SHA‑256 que o GitHub publica para o arquivo. Depois, a assinatura de código, que precisa ser do mesmo certificado do app instalado.
+- **Instalação:** acontece quando nenhum tablet está transmitindo, ou na hora pelo botão *Instalar agora*. O app reabre sozinho.
+- **Tablets:** como o app do Mac carrega o app do tablet, os tablets são atualizados na próxima conexão.
+
+**Tablet** (*Opções › Atualizar sozinho pelo GitHub*)
+- **Quando procura:** ao abrir, no máximo a cada 6 horas, inclusive longe do Mac.
+- **Conferência:** o download é conferido com o SHA‑256 do GitHub, e o Android só instala por cima um APK com a mesma assinatura.
+- **Confirmação:** o Android sempre pede uma confirmação.
+
+### Pela internet, sem servidor
+
+Ligue **Acesso pela internet (sem servidor)** no menu do Mac. O tablet passa a conectar direto no Mac de qualquer lugar, sem nenhum serviço no meio: nada de conta, nuvem ou relay. A conexão continua criptografada de ponta a ponta com as chaves do pareamento.
+
+**Como o Mac fica alcançável**
+- **IPv6:** os endereços IPv6 globais do Mac dispensam NAT. O Mac pede ao roteador, por UPnP IGDv2, para liberar a entrada no firewall IPv6.
+- **IPv4:** o Mac pede ao roteador para abrir a porta (NAT-PMP, depois UPnP) e descobre o IP público com ele. Se a operadora usa CGNAT, ou se há dois roteadores em sequência, o menu avisa e indica o que fazer.
+- **Status:** o menu mostra o que funcionou e qual foi a última conexão vinda de fora.
+
+**Como o tablet acha o Mac**
+- Enquanto está em casa, o tablet recebe do Mac, criptografados, os endereços pela internet. Ao abrir o app longe de casa, se não acha o Mac por perto, tenta todos esses endereços ao mesmo tempo e fica com o primeiro que responder.
+- O campo de IP também aceita IPv6 (`2804::1` ou `[2804::1]:27183`) e nomes, por exemplo o DNS dinâmico do roteador.
+
+**Segurança**
+- Pela internet, só entram tablets já pareados. Um aparelho desconhecido nem chega ao pedido de pareamento.
+- Com o acesso desligado, conexões vindas de fora são fechadas na hora. Tentativas em excesso também são recusadas.
+- A porta só fica aberta no roteador enquanto o acesso está ligado, e é fechada ao desligar ou ao sair do app.
+
+**Qualidade**
+- Pela internet, o bitrate começa em 8 Mbps e o adaptativo sobe conforme a rede deixa.
+- O vídeo vai por UDP com correção de erros, como no Wi‑Fi.
+- Pelo IPv4, a porta UDP externa que o roteador escolheu vai no `CONFIG`.
+
+**Limite:** sem IPv6 e com o IPv4 em CGNAT, ninguém de fora consegue iniciar uma conexão com o Mac. Nesse caso, só com algum intermediário.
+
+### Modo favorito ★
+
+Marque **★** no tablet que deve conectar sozinho: no cartão do tablet conectado, na lista **Tablets autorizados** ou já no pedido de pareamento (*★ Favorito: conecta sozinho, sem código*).
+
+- **O favorito conecta sozinho**: abriu o app no tablet, a transmissão começa, sem código e sem aprovação.
+- **Os outros pedem aprovação**: com pelo menos um favorito, os demais tablets autorizados só conectam depois de *Permitir* no Mac, com o código na tela. Assim um segundo tablet com o app aberto não "rouba" um monitor. Para voltar ao comportamento antigo, desligue *Só favoritos conectam sozinhos*. Quem já está transmitindo nunca é derrubado.
+- **Sem insistência**: um tablet recusado (ou sem resposta) espera alguns minutos antes de pedir de novo; marcar ★ nele libera na hora.
+- **Reconexão mais rápida**: o tablet favorito guarda o endereço do Mac no Wi‑Fi e tenta ele logo depois do USB, sem esperar o Bonjour.
+
+O código continua aparecendo **uma única vez**, na primeira conexão de cada tablet: é ele que impede que qualquer aparelho da rede veja a sua tela.
+
 ### 2. Tablet (Android 8+)
 
 ```bash
@@ -51,7 +102,7 @@ cd android
 ./gradlew installDebug       # ou abra a pasta no Android Studio
 ```
 
-Cada push também gera o APK e o `.app` como artefatos do GitHub Actions (workflow **Build**).
+Cada push também gera o APK e o `.app` como artefatos do GitHub Actions (workflow **Build**). Versões publicadas ficam em **Releases**, e depois da primeira instalação o próprio Mac mantém o tablet atualizado (veja [Atualizações](#atualizações-sem-google-play-nem-app-store)).
 
 ### 3. Conectar
 
@@ -73,8 +124,17 @@ Cada push também gera o APK e o `.app` como artefatos do GitHub Actions (workfl
 | Toque com dois dedos | Clique direito |
 | Toque com três dedos | Alterna o monitor: linha compacta → painel completo → oculto |
 | Girar o tablet | Alterna entre paisagem e retrato **sem reconectar**: o display muda de resolução no lugar |
+| Voltar duas vezes | Encerra a transmissão (um toque só avisa, para não sair sem querer) |
 
-**Teclado e mouse do tablet** — um teclado físico (USB ou Bluetooth) ligado ao tablet digita no Mac enquanto a transmissão está ativa, incluindo modificadores (a tecla Meta/Windows vira ⌘), atalhos e o teclado numérico. Teclados **ABNT2** funcionam com o layout *Brasileiro* do Mac, incluindo ç, acentos e as teclas extras `\ |` e `/ ?`. Em teclados de PC, a opção *Ctrl do teclado funciona como ⌘* deixa Ctrl+C/Ctrl+V como no Mac. Um mouse ou trackpad ligado ao tablet também controla o cursor, com botão direito e rolagem. Atalhos que o próprio Android intercepta (por exemplo Meta+Tab) não chegam ao Mac.
+**Teclado, mouse e trackpad do tablet** — o tablet reconhece sozinho o que está ligado a ele (USB, Bluetooth ou capa‑teclado), avisa e se ajusta. *Opções › Teclado e trackpad…* mostra o que foi detectado e os ajustes:
+
+- **Letras e acentos com o layout do tablet** (padrão): o que está impresso nas teclas é o que aparece no Mac, qualquer que seja a fonte de entrada do Mac — ABNT2 com ç, acentos (´ ~ ^ ` ¨) e AltGr, AZERTY, QWERTZ… Atalhos (com ⌘, Ctrl ou Option) e teclas especiais continuam indo como teclas de verdade. A alternativa *layout do Mac* manda só as posições das teclas.
+- **Tecla ⌘ automática**: em teclados de PC o Ctrl vira ⌘ (Ctrl+C, Ctrl+V, Ctrl+Tab troca de app), porque o Android guarda a tecla Windows/Meta para ele; em teclados Apple o ⌘ continua ⌘. Dá para fixar qualquer uma das duas.
+- **Mouse e trackpad na tela do tablet** (padrão): o cursor do Mac segue o do tablet, o clique é imediato, há botão direito e do meio, a roda rola em linhas como no Mac, e no Android 14+ os gestos do trackpad viram gestos do Mac — dois dedos rolam, pinça dá zoom, três dedos abrem o Mission Control (para cima), o App Exposé (para baixo) ou trocam de Space (para os lados).
+- **Cursor instantâneo** (padrão): com um mouse ou trackpad em uso, o tablet desenha o cursor na hora, sem a latência do vídeo, e o Mac deixa o dele fora do vídeo — um cursor só. A alternativa *o do Mac* mostra os formatos do Mac (I de texto, mãozinha) com o atraso do vídeo.
+- **Trackpad no Mac inteiro** (opcional): o tablet captura o trackpad e move o cursor do Mac de forma relativa, por todas as telas do Mac, com toque para clicar, dois dedos (rolar, pinça, toque = botão direito), três dedos (toque = botão do meio, deslizar = Mission Control e Spaces), velocidade ajustável e rolagem natural ou invertida.
+
+Atalhos que o próprio Android intercepta (Alt+Tab, Meta+qualquer tecla, às vezes Ctrl+Espaço) não chegam ao Mac; a barra de atalhos cobre os principais.
 
 **Barra de atalhos** — em *Opções*, ative a barra lateral com botões do Mac: ⌘ ⌥ ⌃ ⇧ fixos (toque em ⌘ e depois clique = ⌘‑clique), desfazer, refazer, copiar, colar, Esc e outros. *Opções › Atalhos…* escolhe quais botões aparecem.
 
@@ -101,25 +161,52 @@ Cada etapa foi escolhida para não acumular fila:
 
 1. **Display virtual nativo** — a resolução é a do painel do tablet (pixel a pixel, sem reescala) e o refresh segue o do tablet (até 120 Hz).
 2. **Captura zero-copy** — o ScreenCaptureKit entrega `IOSurface` em NV12, que o VideoToolbox consome direto, e só quando a tela muda.
-3. **Encoder em modo tempo real** — rate control de baixa latência, sem B-frames, sem lookahead, um quadro entra e um sai. Keyframes só sob demanda (são os maiores picos de latência).
+3. **Encoder em modo tempo real** — rate control de baixa latência, sem B-frames, sem lookahead, um quadro entra e um sai. Keyframes só sob demanda (são os maiores picos de latência), e nenhum quadro passa de 4× o tamanho médio: quadro grande demora para atravessar o enlace (500 KB levam ~40 ms num Wi‑Fi de 100 Mbps).
 4. **Descartar antes de codificar** — se o socket está atrasado, o quadro capturado é pulado *antes* do encoder. Nunca se enfileira vídeo velho, e a cadeia de referência continua íntegra.
 5. **Transporte certo para cada enlace** — por USB, TCP com `TCP_NODELAY` (enlace sem perdas). No Wi‑Fi, o vídeo vai por **UDP com correção de erros Reed‑Solomon**: cada bloco de até 32 pacotes leva pacotes de paridade e o tablet reconstrói *quaisquer* pacotes perdidos, até a quantidade de paridade, sem esperar retransmissão (que é o que causa travadas no TCP). Os blocos são intercalados no envio, então uma rajada de perdas se espalha por vários blocos. Se o UDP estiver bloqueado, o vídeo continua por TCP automaticamente.
 6. **Bitrate adaptativo** — a cada segundo o tablet informa perda de pacotes, quadros perdidos e ping; o Mac reduz o bitrate rápido ao primeiro sinal de congestionamento e sobe devagar quando o enlace está limpo. A quantidade de paridade do FEC (10–50%) acompanha a perda medida.
 7. **Refino em tela parada** — quando a imagem para de mudar, o último quadro é recodificado duas vezes: recupera a nitidez perdida durante o movimento e, no UDP, revela ao tablet se o último quadro se perdeu.
 8. **Decoder low-latency** — `KEY_LOW_LATENCY`, prioridade realtime, chaves de fabricantes (Qualcomm, HiSilicon…) e renderização imediata no `SurfaceView`, sem esperar timestamp.
 9. **Painel na taxa máxima** — o tablet é colocado no maior refresh disponível para reduzir o tempo de scan-out.
+10. **Rádio Wi‑Fi sem economia de energia** — durante a transmissão o tablet segura um `WifiLock` em modo de baixa latência (Android 10+). Sem ele, o rádio cochila entre beacons e gera picos de 50–100 ms.
+11. **Entrada sem espera** — toque, caneta, hover e mouse são entregues no instante em que chegam (`requestUnbufferedDispatch`), sem esperar o próximo vsync. Saem marcados com DSCP EF, que o Wi‑Fi coloca na fila de voz, à frente do tráfego comum. Com um dedo, o cursor vai para baixo do dedo na hora; só o clique espera alguns milissegundos para distinguir gestos de dois dedos.
+12. **Threads de rede em prioridade de display** — leitura do vídeo, envio da entrada, decoder e UDP rodam como `URGENT_DISPLAY`, para não esperar atrás de trabalho em segundo plano.
+13. **Sem lixo no caminho do vídeo** — o tablet reaproveita os buffers de remontagem dos quadros UDP. Alocar um por quadro gerava ~3 MB/s de lixo, e as coletas resultantes apareciam como picos de latência.
 
 ## Monitor de latência e desempenho (tablet)
 
-Um toque com três dedos alterna entre uma **linha compacta**, o **painel completo** e oculto. O painel mostra, atualizado a cada segundo e com gráfico do último minuto:
+Um toque com três dedos alterna entre uma **linha compacta**, o **painel completo** e oculto (o painel também tem um botão ×, e o app lembra a última escolha). O painel mostra, atualizado a cada segundo e com gráfico do último minuto:
 
 - **Latência Mac→tela** — medida quadro a quadro: do instante em que o Mac começa a codificar o quadro até o tablet entregá-lo à tela, com média e pico. O tablet alinha o relógio com o do Mac pelo ping (a cada segundo), então o número tem margem de erro de até meio ping. Não inclui a captura no Mac nem o tempo de varredura do painel.
-- **Parcelas** — `encode` (no Mac), `rede` (meia viagem do ping) e `decode` (da entrada no decoder até a tela, média e pico).
+- **Parcelas** — `encode` (no Mac), `rede` (meia viagem do ping), `transf` (do primeiro byte ou datagrama do quadro até o quadro completo: o tempo de um quadro grande atravessar o enlace) e `decode` (da entrada no decoder até a tela, média e pico).
+- **Encoder** — codec, fps e se o Mac conseguiu o modo de *baixa latência* do VideoToolbox (sem ele, o encoder segura cerca de um quadro) e o limite de tamanho por quadro.
 - **Desempenho** — transporte, fps, bitrate, perda de pacotes, quadros perdidos, keyframes pedidos, uso de CPU do app (% de um núcleo), memória, bateria, temperatura e estado térmico do tablet.
 
-### Latência de ponta a ponta
+### Teste toque→tela
 
-No painel, **Medir ponta a ponta** faz 20 medições do ciclo completo: o tablet pede ao Mac para trocar a cor de um pequeno quadrado no canto da tela e cronometra até ver a troca na própria tela. Isso inclui rede (ida e volta), o desenho no Mac, captura, codificação, decodificação e composição — só não inclui a varredura do painel. O resultado mostra média, mínimo e p95, e entra na sessão gravada se houver uma. Cada amostra fica alguns milissegundos acima do real, o tempo de ler a tela de volta.
+No painel completo, **⏱ Medir toque→tela** mede a ida e volta real, sem câmera e sem depender do relógio do Mac:
+
+1. o tablet pede ao Mac para pintar de preto ou de branco um quadrado no centro do display virtual e dispara o cronômetro;
+2. o pedido viaja como um toque; o quadrado é uma janela comum, então a mudança passa pelo caminho inteiro (WindowServer → ScreenCaptureKit → encoder → rede → decoder);
+3. o tablet copia (`PixelCopy`) o centro de cada quadro decodificado até ver a cor nova.
+
+São 30 amostras com intervalos aleatórios (para cair em todas as fases do refresh). O resultado mostra média, p50, p95, mínima e máxima, e separa **ida tablet→Mac** de **volta Mac→tela** usando o relógio sincronizado pelo ping. Com uma sessão sendo gravada, o resultado também vai para o CSV e para o resumo.
+
+O número inclui tudo entre o app do tablet e o vídeo decodificado, inclusive a composição e a captura no Mac, que o monitor quadro a quadro não vê. Não inclui o digitalizador do toque nem a varredura do painel. Antes de medir, o teste calibra quatro regiões do quadrado e ignora as que o cursor do Mac estiver cobrindo.
+
+### Benchmark automático
+
+**🏁 Benchmark automático** roda, com um toque, uma matriz de configurações e mostra qual tem a menor latência:
+
+| Configuração | Para que serve |
+|---|---|
+| HEVC 60 · com e sem limite por quadro | mede o efeito do limite de tamanho por quadro |
+| H.264 60 · com e sem limite por quadro | o mesmo, no codec que costuma ter modo de baixa latência |
+| H.264 e HEVC na taxa alta do painel (90–120 Hz) | se o atraso do encoder é de um quadro inteiro, ele cai pela metade |
+
+Cada configuração é uma transmissão nova, que o tablet pede ao Mac só para aquele teste (os ajustes do menu não mudam). Para cada uma: 3 s de aquecimento, 8 s com um **padrão de movimento fixo** cobrindo a tela do Mac (sempre o mesmo, para que rodadas sejam comparáveis) e 20 amostras do teste toque→tela com a tela parada. Leva cerca de 2 minutos; tocar de novo interrompe. No fim a transmissão normal volta sozinha.
+
+O resultado aparece no painel (uma linha por configuração, com toque p50/p95, latência em movimento e as parcelas, e a melhor configuração) e vai para `screeaner-benchmark-….csv`, ao lado das sessões e em `Downloads/Screeaner/`. **Compartilhar** envia o arquivo mais recente, inclusive o do benchmark.
 
 ### Sessões de teste
 
@@ -131,7 +218,49 @@ No painel completo, **● Gravar sessão de teste** grava uma linha por segundo 
 
 ### Versão do app
 
-A versão aparece no rodapé da tela de conexão e no título do painel do tablet (`Screeaner v0.3.0 (3) · Android … · modelo`), e no rodapé do menu do Mac. Cada lado também mostra a versão do outro: o menu do Mac lista a versão do app de cada tablet, e as sessões gravadas registram a versão do Mac.
+A versão aparece no rodapé da tela de conexão e no título do painel do tablet (`Screeaner v0.9.1 (12) · Android … · modelo`), e no rodapé do menu do Mac. Cada lado também mostra a versão do outro: o menu do Mac lista a versão do app de cada tablet, e as sessões gravadas registram a versão do Mac.
+
+## Atualizações (sem Google Play nem App Store)
+
+Cada tag `vX.Y.Z` publica um **GitHub Release** (workflow **Release**) com:
+
+- `Screeaner.apk` — o app do tablet, sempre assinado com a **mesma chave**, então instala por cima da versão anterior;
+- `Screeaner-mac.zip` — o app do Mac, **com o APK do tablet dentro**.
+
+**O Mac atualiza o tablet sozinho.** Quando um tablet com versão mais velha conecta:
+
+- **por USB** (com `adb`): o Mac instala com `adb install -r` e reabre o app — nenhum toque;
+- **por Wi‑Fi** (ou se o adb falhar): o tablet pergunta *"Atualizar o Screeaner para vX?"*; um toque, o APK vem pela própria conexão (conferido por tamanho e SHA‑256) e o Android pede a confirmação de instalação. Na primeira vez, o Android pede para permitir instalações vindas do Screeaner.
+
+O Android só aceita a atualização se ela tiver a mesma assinatura do app instalado: um APK adulterado é recusado pelo próprio tablet.
+
+Para o Mac, baixe o `Screeaner-mac.zip` do Release e substitua o app.
+
+### Preparar uma vez
+
+1. **Chave do app Android** — no Mac, crie o keystore e **guarde uma cópia em lugar seguro** (sem ele não dá para publicar atualizações que instalem por cima):
+
+   ```bash
+   keytool -genkeypair -v -keystore screeaner.jks -alias screeaner -keyalg RSA -keysize 4096 -validity 36500
+   ```
+
+   (Precisa de Java; sem ele, gere em qualquer máquina que tenha — o arquivo é o mesmo.) No GitHub, em *Settings › Secrets and variables › Actions*, crie `ANDROID_KEYSTORE_BASE64` (saída de `base64 -i screeaner.jks`) e `ANDROID_KEYSTORE_PASSWORD`. O alias padrão é `screeaner` e a senha da chave é a mesma do keystore; se forem outros, crie também `ANDROID_KEY_ALIAS` e `ANDROID_KEY_PASSWORD`.
+
+2. **Certificado do Mac (opcional, grátis)** — sem conta Apple Developer, um certificado autoassinado basta para o macOS **manter as permissões** de Gravação de Tela e Acessibilidade entre versões: *Acesso às Chaves › Assistente de Certificado › Criar um Certificado…*, nome `Screeaner`, tipo de identidade *Raiz Autoassinada*, tipo de certificado *Assinatura de Código*. Exporte como `.p12` e crie os secrets `MAC_CERT_P12_BASE64` (`base64 -i Screeaner.p12`) e `MAC_CERT_PASSWORD`. Para builds locais: `CODESIGN_IDENTITY="Screeaner" ./scripts/bundle.sh`. Sem notarização, o macOS pede *clique direito › Abrir* na primeira execução de cada versão baixada.
+
+3. **Transição** — os APKs anteriores ao primeiro Release eram assinados com chaves de debug diferentes: desinstale o Screeaner do tablet e instale o `Screeaner.apk` do Release uma vez. Daí em diante as atualizações são automáticas.
+
+**Da 0.6 para a 0.7** — a 0.7 trouxe pareamento e criptografia, então os dois apps precisam estar na mesma geração. Basta atualizar o Mac: quando um tablet ainda na 0.6 conecta, o Mac 0.7 reconhece o app antigo e oferece a atualização pelo mesmo fluxo da 0.6 (adb por USB, ou um toque no tablet pelo Wi‑Fi). Um tablet 0.7 ligado a um Mac antigo avisa que o app do Mac precisa ser atualizado.
+
+### Publicar uma versão
+
+Suba `versionCode`/`versionName` em `android/app/build.gradle.kts` e `CFBundleShortVersionString`/`CFBundleVersion` em `mac/Resources/Info.plist`, e crie a tag (o workflow confere que ela bate com o `versionName`):
+
+```bash
+git tag v0.7.0 && git push origin v0.7.0
+```
+
+Notarização (opcional, exige conta Apple Developer): com um certificado *Developer ID Application* em `MAC_CERT_*` e os secrets `APPLE_ID`, `APPLE_TEAM_ID` e `APPLE_APP_PASSWORD`, o Release também notariza o app, e o macOS o abre sem avisos. O Release publica ainda `Screeaner-android.aab`, o pacote para a Play Store. Mais detalhes em [docs/DISTRIBUTION.md](docs/DISTRIBUTION.md).
 
 ## Ajustes (menu do Mac)
 
@@ -142,7 +271,7 @@ A versão aparece no rodapé da tela de conexão e no título do painel do table
 - **UDP com correção de erros no Wi‑Fi** — desligue para forçar TCP.
 - **Codec** — H.264 (decode mais rápido na maioria dos tablets) ou HEVC (mais nítido no mesmo bitrate).
 - **Abrir ao iniciar o Mac**, **abrir o app no tablet ao conectar o USB**, **compartilhar a área de transferência** e **tela espelhada**.
-- **Tablets autorizados** — lista dos tablets pareados, com botão para remover.
+- **Tablets autorizados** — lista dos tablets pareados, com ★ (favorito: conecta sozinho), *Só favoritos conectam sozinhos* e botão para remover.
 
 Mudar um ajuste reinicia a transmissão automaticamente.
 
@@ -166,8 +295,8 @@ Mudar um ajuste reinicia a transmissão automaticamente.
 
 | Tipo | Sentido | Payload |
 |---|---|---|
-| 1 `HELLO` | tablet → Mac | JSON: `width`, `height`, `densityDpi`, `refreshRate`, `codecs`, `name`, `udp`, `version`, `mode` (`extend`/`main`/`mirror`/`only`), `position` (`auto`/`left`/`right`/`above`/`below`), `clipboard`, `audio` |
-| 2 `CONFIG` | Mac → tablet | JSON: `codec`, `width`, `height`, `fps`, `token`, `udpPort`, `mode`, `server`, `version`, `audio`. Um novo `CONFIG` no meio da sessão indica nova resolução |
+| 1 `HELLO` | tablet → Mac | JSON: `width`, `height`, `densityDpi`, `refreshRate`, `codecs`, `name`, `udp`, `version`, `mode` (`extend`/`main`/`mirror`/`only`), `position` (`auto`/`left`/`right`/`above`/`below`), `clipboard`, `audio` e, opcional, `streamOverride` {`codec`, `fps`, `frameCap`} (benchmark) |
+| 2 `CONFIG` | Mac → tablet | JSON: `codec`, `width`, `height`, `fps`, `token`, `udpPort`, `mode`, `server`, `version`, `audio`, `lowLatency`, `frameCap`, `favorite` (o tablet guarda o endereço do Mac). Um novo `CONFIG` no meio da sessão indica nova resolução |
 | 3 `VIDEO` | Mac → tablet | `pts u64` · `flags u8` (1 = keyframe) · `encodeMicros u32` · access unit Annex‑B |
 | 4 `TOUCH` | tablet → Mac | `action u8` (0 down, 1 move, 2 up, 3 hover, 4/5 caneta entra/sai do alcance) · `x f32` · `y f32` · `pressure f32` · `button u8` · `tiltX f32` · `tiltY f32` · `tool u8` (0 dedo/mouse, 1 caneta, 2 borracha) |
 | 5 `SCROLL` | tablet → Mac | `dx f32` · `dy f32` · `x f32` · `y f32` |
@@ -176,18 +305,39 @@ Mudar um ajuste reinicia a transmissão automaticamente.
 | 9 `STATS` | tablet → Mac | `rttMicros u32` · `packetsExpected u32` · `packetsLost u32` · `framesLost u16` · `framesRendered u16` |
 | 10 `ZOOM` | tablet → Mac | `phase u8` (0 início, 1 mudança, 2 fim) · `delta f32` · `x f32` · `y f32` |
 | 11 `KEY` | tablet → Mac | `action u8` (0 down, 1 up) · `androidKeyCode u16` · `flags u8` (1 = repetição) · `scanCode u16` |
-| 12 `RESIZE` | tablet → Mac | JSON `width`, `height` (rotação) |
-| 13 `CLIPBOARD` | tablet ⇄ Mac | texto UTF‑8 |
-| 14 `AUDIO` | Mac → tablet | PCM s16le estéreo 48 kHz |
-| 15 `PROBE` / 16 `PROBE_INFO` | tablet → Mac / Mac → tablet | `id u32` (0 mostra o marcador) / retângulo do marcador `x, y, w, h f32` |
+| 12 `PROBE` | tablet → Mac | `state u8` (0 oculto, 1 preto, 2 branco, 3/4 liga/desliga o padrão de movimento do benchmark) · `seq u32` |
+| 13 `PROBE_ACK` | Mac → tablet | `seq u32` · `macClockMicros u64` (instante em que o quadrado foi pintado) |
+| 14 `UPDATE_OFFER` | Mac → tablet | JSON: `versionName`, `versionCode`, `size`, `sha256` — o Mac traz um app do tablet mais novo |
+| 15 `UPDATE_REQUEST` | tablet → Mac | vazio: o usuário aceitou |
+| 16 `UPDATE_APK` | Mac → tablet | os bytes do APK |
+| 17 `RESIZE` | tablet → Mac | JSON `width`, `height` (rotação) |
+| 18 `CLIPBOARD` | tablet ⇄ Mac | texto UTF‑8 |
+| 19 `AUDIO` | Mac → tablet | PCM s16le estéreo 48 kHz |
+| 27 `MOUSE` | tablet → Mac | `kind u8` (0 mover relativo, 1 botão desce, 2 botão sobe, 3 roda em linhas, 4 rolagem em pontos, 5 zoom, 6 cursor do Mac no vídeo) · `button u8` (botão 0/1/2, fase do zoom, ou 1/0 mostrar/esconder) · `a f32` · `b f32` · `x f32` · `y f32` (NaN = onde está o cursor). Mac 0.8+ |
+| 28 `TEXT` | tablet → Mac | `action u8` · `androidKeyCode u16` · `scanCode u16` · `flags u8` · texto UTF‑8 já com o layout do tablet. Mac 0.8+ |
+| 29 `ENDPOINTS` | Mac → tablet | JSON `{hosts: [{host, port, udp}]}`: endereços IPv6 globais e IPv4 público do Mac para a internet (lista vazia = esquecer) |
 
 Coordenadas são normalizadas (0–1) em relação à tela do tablet.
+
+**Compatibilidade com a 0.6** — um tablet antigo manda `HELLO` em claro. O Mac 0.7 não transmite para ele, mas aceita só a troca `UPDATE_OFFER` / `UPDATE_REQUEST` / `UPDATE_APK` em claro, para que o tablet se atualize (o Android confere a assinatura do APK).
 
 **Vídeo por UDP** — quando o `CONFIG` traz `token ≠ 0`, o tablet envia para `udpPort` um datagrama `"SCRN"` + `token u32` (repetido como keep-alive) e o Mac responde nesse mesmo fluxo, a partir do próximo keyframe. Cada quadro (`pts u64` · `encodeMicros u32` · Annex‑B) é cifrado com AES‑256‑GCM (nonce = `frameId`) e só então protegido pelo FEC. Cada datagrama é:
 
 `[frameId u32][index u16][k u16][m u16][flags u8][versão u8 = 2][frameSize u32][shard]`
 
 O quadro cifrado vira `k` shards iguais de até 1200 bytes, agrupados em blocos de até 32, e cada bloco ganha shards de paridade Reed‑Solomon (matriz de Cauchy sobre GF(256)). Um bloco é reconstruído assim que recebe tantos shards quanto tem de dados, quaisquer que sejam. Um quadro irrecuperável faz o tablet pedir um keyframe. O formato é verificado nos dois lados pelo mesmo vetor de referência, e a criptografia por vetores calculados de forma independente em Python.
+
+## Visual (Screeaner Dot)
+
+Os dois apps seguem a mesma linguagem: **tinta clara sobre preto**, um único **vermelho de sinal** (`#E8352B`) só para o que está ao vivo, gravando ou errado, e **pontos como unidade de medida** (progresso em pontos, gráfico de latência em pontos, radar de busca). Rótulos numerados (`01 / CONEXÃO`) e linhas de 1 px no lugar de caixas e gradientes.
+
+| Papel | Fonte |
+|---|---|
+| Números grandes e marca | Doto (matriz de pontos) |
+| Interface | Space Grotesk |
+| Rótulos e métricas | JetBrains Mono |
+
+As fontes vão embutidas nos apps (tablet: `res/font`; Mac: `Contents/Resources/Fonts`), sob a SIL Open Font License — textos em `licenses/`.
 
 ## Estrutura
 
@@ -196,6 +346,7 @@ mac/      App de barra de menus (Swift Package): display virtual, captura, encod
           Sources/ScreeanerCore: Reed‑Solomon, canal seguro e controle de bitrate, com testes (swift test)
 android/  App Kotlin sem dependências externas: pareamento, decoder, FEC, áudio, caneta, teclado e atalhos
           ReedSolomon/FecAssembler/SecureChannel em Java, com testes JUnit
+licenses/   Licenças das fontes (SIL OFL)
 packaging/  Cask do Homebrew
 docs/       Distribuição: assinatura, notarização, releases, lojas
 ```

@@ -40,6 +40,9 @@ class VideoDecoder(
      */
     @Volatile var clockOffsetMicros = Long.MIN_VALUE
 
+    /** Called on the output thread with System.nanoTime() each time a frame goes to the display. */
+    @Volatile var onRendered: ((Long) -> Unit)? = null
+
     private val statsLock = Any()
     private var frames = 0
     private var decodeNanosSum = 0L
@@ -172,6 +175,7 @@ class VideoDecoder(
                         }
                     }
                     if (queuedAt.size > 64) queuedAt.clear()
+                    onRendered?.invoke(now)
                 }
             } catch (e: IllegalStateException) {
                 if (running) Log.w(TAG, "Decoder output failed", e)
@@ -199,8 +203,13 @@ class VideoDecoder(
         fun mimeFor(codecName: String): String =
             if (codecName == "hevc") MediaFormat.MIMETYPE_VIDEO_HEVC else MediaFormat.MIMETYPE_VIDEO_AVC
 
-        /** Codecs this device can decode at the given size, in protocol naming. */
-        fun supportedCodecs(width: Int, height: Int): List<String> {
+        private val codecCache = java.util.concurrent.ConcurrentHashMap<Long, List<String>>()
+
+        /** Codecs this device can decode at the given size; cached, since listing codecs is slow. */
+        fun supportedCodecs(width: Int, height: Int): List<String> =
+            codecCache.getOrPut((width.toLong() shl 32) or height.toLong()) { querySupportedCodecs(width, height) }
+
+        private fun querySupportedCodecs(width: Int, height: Int): List<String> {
             val list = MediaCodecList(MediaCodecList.REGULAR_CODECS)
             return listOf("h264", "hevc").filter { name ->
                 val format = MediaFormat.createVideoFormat(mimeFor(name), width, height)

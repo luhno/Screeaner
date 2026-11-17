@@ -1,0 +1,6 @@
+0.8.0
+• Reconhece teclado, mouse e trackpad do tablet e se ajusta sozinho
+• Letras e acentos com o layout do tablet (ABNT2, AltGr), em qualquer Mac
+• Ctrl vira ⌘ em teclados de PC
+• Trackpad: clique imediato, rolagem com dois dedos, pinça e três dedos
+• Cursor instantâneo e modo trackpad no Mac inteiro

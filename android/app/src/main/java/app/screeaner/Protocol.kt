@@ -22,11 +22,17 @@ object Protocol {
     const val STATS = 9             // tablet -> mac, [rttMicros u32][packetsExpected u32][packetsLost u32][framesLost u16][framesRendered u16]
     const val ZOOM = 10             // tablet -> mac, [phase u8][delta f32][x f32][y f32]
     const val KEY = 11              // tablet -> mac, [action u8][androidKeyCode u16][flags u8][scanCode u16]
-    const val RESIZE = 12           // tablet -> mac, JSON {width, height}
-    const val CLIPBOARD = 13        // both ways, UTF-8 text
-    const val AUDIO = 14            // mac -> tablet, PCM s16le stereo 48 kHz
-    const val PROBE = 15            // tablet -> mac, [id u32] (0 = show the marker)
-    const val PROBE_INFO = 16       // mac -> tablet, [x f32][y f32][w f32][h f32]
+    const val PROBE = 12            // tablet -> mac, [state u8][seq u32] (latency test square)
+    const val PROBE_ACK = 13        // mac -> tablet, [seq u32][macClockMicros u64] once the square was painted
+    const val UPDATE_OFFER = 14     // mac -> tablet, JSON {versionName, versionCode, size, sha256}
+    const val UPDATE_REQUEST = 15   // tablet -> mac, empty: send the APK
+    const val UPDATE_APK = 16       // mac -> tablet, the APK bytes
+    const val RESIZE = 17           // tablet -> mac, JSON {width, height}
+    const val CLIPBOARD = 18        // both ways, UTF-8 text
+    const val AUDIO = 19            // mac -> tablet, PCM s16le stereo 48 kHz
+    const val MOUSE = 27            // tablet -> mac, [kind u8][button u8][a f32][b f32][x f32][y f32] (Mac 0.8+)
+    const val ENDPOINTS = 29        // mac -> tablet, JSON {hosts: [{host, port, udp}]}: the Mac from the internet
+    const val TEXT = 28             // tablet -> mac, [action u8][keyCode u16][scanCode u16][flags u8][UTF-8] (Mac 0.8+)
 
     const val SEC_HELLO = 20
     const val SEC_SERVER = 21
@@ -40,6 +46,9 @@ object Protocol {
     const val UDP_MAGIC = 0x5343524E
 
     const val VIDEO_HEADER = 13
+
+    /** IP traffic class for DSCP 46 (Expedited Forwarding), which Wi-Fi maps to the voice queue. */
+    const val DSCP_EF = 0xB8
 
     const val ACTION_DOWN = 0
     const val ACTION_MOVE = 1
@@ -56,6 +65,22 @@ object Protocol {
     const val ZOOM_CHANGE = 1
     const val ZOOM_END = 2
 
+    const val PROBE_HIDDEN = 0
+    const val PROBE_BLACK = 1
+    const val PROBE_WHITE = 2
+    const val PROBE_MOTION_ON = 3   // benchmark: moving pattern over the whole display
+    const val PROBE_MOTION_OFF = 4
+
     const val BUTTON_LEFT = 0
     const val BUTTON_RIGHT = 1
+    const val BUTTON_MIDDLE = 2
+
+    // MOUSE kinds; x/y NaN = at the Mac's cursor.
+    const val MOUSE_MOVE = 0        // a, b: relative movement in points
+    const val MOUSE_DOWN = 1        // button
+    const val MOUSE_UP = 2
+    const val MOUSE_WHEEL = 3       // a, b: lines, positive = left / up
+    const val MOUSE_SCROLL = 4      // a, b: points, content follows the fingers
+    const val MOUSE_ZOOM = 5        // button: ZOOM_* phase, a: relative change
+    const val MOUSE_CURSOR = 6      // button: 1 draw the Mac's cursor in the video, 0 hide it
 }

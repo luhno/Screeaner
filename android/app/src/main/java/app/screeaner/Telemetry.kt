@@ -18,9 +18,24 @@ data class StreamInfo(
     val fps: Int,
     val macName: String,
     val macVersion: String,
-    /** Display mode the Mac actually applied: extend, main or mirror. */
-    val mode: String,
-)
+    /** True when the Mac's encoder runs in low-latency rate control; null if the Mac app is too old to say. */
+    val lowLatencyEncoder: Boolean? = null,
+    /** True when each encoded frame is capped in size; null if unknown. */
+    val frameCap: Boolean? = null,
+    /** Display mode the Mac actually applied: extend, main, mirror or only. */
+    val mode: String = "extend",
+) {
+    /** "H.264 · 60 fps · encoder baixa latência · limite por quadro" */
+    fun describe(): String {
+        val parts = mutableListOf(if (codec == "hevc") "HEVC" else "H.264", "$fps fps")
+        lowLatencyEncoder?.let { parts += if (it) "encoder baixa latência" else "encoder normal" }
+        frameCap?.let { parts += if (it) "limite por quadro" else "sem limite por quadro" }
+        return parts.joinToString(" · ")
+    }
+}
+
+/** Settings the tablet asks the Mac to use for one stream (the benchmark's configurations). */
+data class StreamOverride(val label: String, val codec: String, val fps: Int, val frameCap: Boolean)
 
 /** One second of stream measurements. Latencies are NaN while the clocks are not synced yet. */
 data class StreamSample(
@@ -33,6 +48,9 @@ data class StreamSample(
     val encodeMs: Double,
     /** Half of the ping round trip. */
     val networkMs: Double,
+    /** First byte (TCP) or datagram (UDP) of a frame -> whole frame received. */
+    val transferAvgMs: Double,
+    val transferMaxMs: Double,
     /** Frame enters the decoder -> handed to the display. */
     val decodeAvgMs: Double,
     val decodeMaxMs: Double,
@@ -82,15 +100,16 @@ class DeviceMonitor(private val context: Context) {
     }
 
     private fun thermalStatus(): String {
-        if (Build.VERSION.SDK_INT < 29) return "n/d"
+        val names = context.resources.getStringArray(R.array.thermal_states)
+        if (Build.VERSION.SDK_INT < 29) return names[7]
         return when (power.currentThermalStatus) {
-            PowerManager.THERMAL_STATUS_NONE -> "normal"
-            PowerManager.THERMAL_STATUS_LIGHT -> "leve"
-            PowerManager.THERMAL_STATUS_MODERATE -> "moderado"
-            PowerManager.THERMAL_STATUS_SEVERE -> "severo"
-            PowerManager.THERMAL_STATUS_CRITICAL -> "crítico"
-            PowerManager.THERMAL_STATUS_EMERGENCY -> "emergência"
-            else -> "desligando"
+            PowerManager.THERMAL_STATUS_NONE -> names[0]
+            PowerManager.THERMAL_STATUS_LIGHT -> names[1]
+            PowerManager.THERMAL_STATUS_MODERATE -> names[2]
+            PowerManager.THERMAL_STATUS_SEVERE -> names[3]
+            PowerManager.THERMAL_STATUS_CRITICAL -> names[4]
+            PowerManager.THERMAL_STATUS_EMERGENCY -> names[5]
+            else -> names[6]
         }
     }
 }

@@ -1,16 +1,59 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Screeaner</string>
-    <string name="status_searching">Procurando o Mac…</string>
-    <string name="status_connecting">Conectando a %1$s…</string>
-    <string name="status_waiting_stream">Conectado. Aguardando vídeo…</string>
-    <string name="help">Abra o Screeaner no Mac.\n\nUSB (menor latência): ative a Depuração USB e conecte o cabo.\nWi‑Fi: mantenha Mac e tablet na mesma rede.\n\nDois dedos: rolar · Pinça: zoom · Toque com dois dedos: clique direito\nToque com três dedos: monitor de latência e desempenho · Gire o tablet para usar em retrato\nTeclado e mouse ligados ao tablet controlam o Mac · Na primeira conexão, confira o código mostrado nas duas telas</string>
+    <string name="status_searching">Procurando\no Mac</string>
+    <string name="status_connecting">Conectando</string>
+    <string name="status_waiting_stream">Aguardando\nvídeo</string>
+    <string name="help">Abra o Screeaner no Mac. O tablet tenta o cabo primeiro e depois a rede, sozinho. Na primeira conexão, as duas telas mostram o mesmo código para você confirmar. Fora de casa, com o acesso pela internet ligado no Mac, ele conecta direto pela internet.</string>
+    <string name="host_hint">IP ou nome do Mac · opcional</string>
+    <string name="connect">Conectar</string>
+    <string name="monitor_latency">Mac → tela</string>
+    <string name="monitor_performance">Desempenho</string>
+    <string name="record_start">Gravar sessão</string>
+    <string name="record_stop">Gravando · %1$s</string>
+    <string name="record_share">Compartilhar</string>
+    <string name="record_hint">Grava uma linha por segundo em CSV. Três dedos: alterna linha compacta, painel e oculto.</string>
+    <string name="record_saved">Salvo em %1$s</string>
+    <string name="record_failed">Não foi possível gravar a sessão</string>
+    <string name="record_none">Nenhuma sessão gravada ainda</string>
+    <string name="probe_start">Medir toque→tela</string>
+    <string name="probe_running">Parar · %1$d/%2$d</string>
+    <string name="probe_hint">Mede a ida e volta real: o tablet pede ao Mac para piscar um quadrado no centro da tela e cronometra até ver a cor nova no vídeo.</string>
+    <string name="probe_started">Um quadrado pisca no centro da tela por alguns segundos. Não mexa no Mac enquanto mede.</string>
+    <string name="probe_last">última: %1$s ms</string>
+    <string name="probe_no_mac">O Mac não respondeu. Atualize o app do Mac para a mesma versão do tablet.</string>
+    <string name="probe_no_square">O quadrado de teste não apareceu no vídeo. Tire o cursor do centro da tela e tente de novo.</string>
+    <string name="probe_cancelled">Medição interrompida.</string>
+    <string name="probe_unavailable">Só dá para medir com a transmissão ativa.</string>
+    <string name="benchmark_start">Benchmark</string>
+    <string name="benchmark_stop">Parar benchmark</string>
+    <string name="benchmark_started">Testa cada codec, taxa de quadros e o limite por quadro, com movimento padronizado e toque→tela. A tela do Mac pisca e se move durante o teste; não mexa nele.</string>
+    <string name="benchmark_saved">Relatório salvo em %1$s (Compartilhar envia ele)</string>
+    <string name="benchmark_busy">Aguarde o fim do benchmark.</string>
+    <string name="update_title">Atualizar o Screeaner para v%1$s?</string>
+    <string name="update_message">O app do Mac traz uma versão mais nova do app do tablet (instalada: v%1$s · %2$d KB). O Android vai pedir confirmação; o app fecha ao instalar, depois é só abrir de novo.</string>
+    <string name="update_accept">Atualizar</string>
+    <string name="update_later">Depois</string>
+    <string name="update_permission">Permita instalar apps do Screeaner e volte: a atualização continua sozinha.</string>
+    <string name="update_done">Screeaner atualizado</string>
+    <string name="update_cancelled">Atualização cancelada</string>
+    <string name="update_signature">A atualização tem outra assinatura que a versão instalada. Desinstale o Screeaner e instale o APK do Release uma vez; as próximas atualizações serão automáticas.</string>
+    <string name="update_failed">Não foi possível atualizar: %1$s</string>
+    <string name="label_connection">01 / Conexão</string>
+    <string name="label_searching">Procurando</string>
+    <string name="label_connecting">Conectando · %1$s</string>
+    <string name="label_waiting">Conectado</string>
+    <string name="option_usb">USB</string>
+    <string name="option_usb_detail">Depuração USB ligada e o cabo conectado. Menor latência, zero oscilação.</string>
+    <string name="option_wifi">Wi‑Fi</string>
+    <string name="option_wifi_detail">Mesma rede do Mac. Ele aparece sozinho; prefira 5 GHz ou Wi‑Fi 6.</string>
+    <string name="footer_gestures">Dois dedos: rolar · pinça: zoom · toque com dois dedos: clique direito · três dedos: monitor · teclado e trackpad: Opções</string>
+    <string name="encoder_normal">%1$s · encoder normal: cerca de 1 quadro a mais de atraso</string>
     <string name="status_pairing">Pareando com %1$s…</string>
     <string name="pairing_confirm">O código é o mesmo</string>
     <string name="pairing_cancel">Cancelar</string>
     <string name="pairing_compare">Confira se o Mac “%1$s” mostra este mesmo código.</string>
     <string name="pairing_waiting">Aprove no Mac “%1$s”, que mostra este mesmo código.</string>
-    <string name="pairing_denied">Conexão recusada: %1$s</string>
     <string name="options">Opções</string>
     <string name="options_title">Opções do Screeaner</string>
     <string-array name="option_labels">
@@ -18,9 +61,45 @@
         <item>Compartilhar área de transferência (texto)</item>
         <item>Ignorar a palma da mão ao usar a caneta</item>
         <item>Barra de atalhos na lateral</item>
-        <item>Ctrl do teclado funciona como ⌘</item>
+        <item>Atualizar sozinho pelo GitHub</item>
     </string-array>
-    <string name="options_shortcuts">Atalhos…</string>
+    <string name="github_update_message">Há uma versão nova do Screeaner no GitHub (instalada: v%1$s · %2$d KB). O download é conferido com o GitHub e o Android só aceita a mesma assinatura. Ele vai pedir confirmação; o app fecha ao instalar, depois é só abrir de novo.</string>
+    <string name="updated_to">Screeaner atualizado para v%1$s (antes v%2$s)</string>
+    <string name="github_downloading">Baixando a v%1$s do GitHub…</string>
+    <string name="github_failed">Não deu para baixar a atualização do GitHub. Tente de novo mais tarde.</string>
+    <string name="options_input">Teclado e trackpad…</string>
+    <string name="options_shortcuts">Botões da barra de atalhos…</string>
+    <string name="input_title">Teclado, trackpad e mouse</string>
+    <string name="input_none">Nenhum teclado, mouse ou trackpad conectado ao tablet</string>
+    <string name="input_keyboard">Teclado %1$s (%2$s)</string>
+    <string name="input_touchpad">Trackpad %1$s</string>
+    <string name="input_mouse">Mouse %1$s</string>
+    <string name="input_connected">%1$s · ajustado para o Mac</string>
+    <string name="input_cmd">Tecla ⌘ do Mac: %1$s</string>
+    <string name="cmd_auto">automática · %1$s</string>
+    <string name="cmd_ctrl">Ctrl do teclado</string>
+    <string name="cmd_meta">tecla ⌘ / Windows do teclado</string>
+    <string name="cmd_is_ctrl">Ctrl = ⌘</string>
+    <string name="cmd_is_cmd">⌘ = ⌘</string>
+    <string name="input_chars">Letras e acentos: %1$s</string>
+    <string name="chars_tablet">layout do tablet (o que está nas teclas)</string>
+    <string name="chars_mac">layout do Mac</string>
+    <string name="input_cursor">Cursor: %1$s</string>
+    <string name="cursor_local">instantâneo, desenhado no tablet</string>
+    <string name="cursor_mac">o do Mac, no vídeo (com os formatos do Mac)</string>
+    <string name="input_trackpad">Trackpad e mouse: %1$s</string>
+    <string name="trackpad_screen">na tela do tablet</string>
+    <string name="trackpad_mac">controlam o Mac inteiro, todas as telas</string>
+    <string name="input_speed">Velocidade no Mac inteiro: %1$s</string>
+    <string-array name="pointer_speeds">
+        <item>lenta</item>
+        <item>normal</item>
+        <item>rápida</item>
+    </string-array>
+    <string name="input_scroll">Rolagem do trackpad: %1$s</string>
+    <string name="scroll_natural">natural (o conteúdo segue os dedos)</string>
+    <string name="scroll_reverse">invertida</string>
+    <string name="input_old_mac">Atualize o Screeaner no Mac para a 0.8: com ele o layout do tablet, o cursor instantâneo e o trackpad no Mac inteiro funcionam.</string>
     <string name="options_forget">Esquecer Macs</string>
     <string name="shortcuts_title">Botões da barra de atalhos</string>
     <string-array name="shortcut_labels">
@@ -46,14 +125,6 @@
     <string name="forget_none">nenhum</string>
     <string name="cancel">Cancelar</string>
     <string name="ok">OK</string>
-    <string name="measure">Medir ponta a ponta</string>
-    <string name="measuring">Medindo… não toque na tela</string>
-    <string name="measure_failed">Não foi possível medir (o Mac precisa da versão 0.4 ou mais nova)</string>
-    <string name="measure_result">Ponta a ponta (Mac desenha → tablet mostra, ida e volta): média %1$s ms · mín %2$s · p95 %3$s (%4$d de %5$d)</string>
-    <string name="host_hint">IP do Mac (opcional)</string>
-    <string name="connect">Conectar</string>
-    <string name="display_header">EXIBIÇÃO NO MAC</string>
-    <string name="display_hint">Extensão: mais área de trabalho · Monitor principal: barra de menus e Dock vão para o tablet · Espelhar: o tablet mostra a tela do Mac · Só o tablet: tudo vai para o tablet e a tela do Mac é apagada</string>
     <string-array name="display_modes">
         <item>Extensão</item>
         <item>Monitor principal</item>
@@ -67,13 +138,37 @@
         <item>Acima do Mac</item>
         <item>Abaixo do Mac</item>
     </string-array>
-    <string name="monitor_latency">LATÊNCIA</string>
-    <string name="monitor_performance">DESEMPENHO</string>
-    <string name="record_start">● Gravar sessão de teste</string>
-    <string name="record_stop">■ Parar gravação (%1$s)</string>
-    <string name="record_share">Compartilhar</string>
-    <string name="record_hint">Grava uma linha por segundo em CSV. Três dedos: alterna linha compacta, painel e oculto.</string>
-    <string name="record_saved">Salvo em %1$s</string>
-    <string name="record_failed">Não foi possível gravar a sessão</string>
-    <string name="record_none">Nenhuma sessão gravada ainda</string>
+    <string name="label_pairing">Pareamento</string>
+    <string name="label_pairing_code">Código de pareamento</string>
+    <string name="option_display">Exibição</string>
+    <string name="options_more">Opções · áudio, caneta, atalhos, teclado</string>
+    <string name="monitor_close">Fechar o painel</string>
+    <string name="monitor_title">02 / Monitor · v%1$s · %2$s</string>
+    <string name="monitor_peak">ms · pico %1$s</string>
+    <string name="monitor_breakdown">ENC %1$s · REDE %2$s · TRANSF %3$s · DEC %4$s</string>
+    <string name="monitor_breakdown_wide">ENC %1$-6s REDE %2$-5s TRANSF %3$-5s DEC %4$s</string>
+    <string name="monitor_perf_headers">FPS|MBPS|PERDA|CPU|MEM|BATERIA</string>
+    <string name="monitor_perf_footer">%1$s · %2$s · quadros perdidos %3$d · keyframes %4$d</string>
+    <string name="hud_loss">perda %1$s%%</string>
+    <string name="a11y_display_mode">Modo de exibição no Mac</string>
+    <string name="a11y_display_position">Posição em relação à tela do Mac</string>
+    <string name="denied_by_mac">O Mac recusou a conexão: %1$s</string>
+    <string name="denied_by_mac_generic">O Mac recusou a conexão.</string>
+    <string name="denied_mac_too_old">O app do Mac não respondeu ao pareamento. Atualize o Screeaner no Mac para a versão %1$s.</string>
+    <string name="denied_cancelled">Pareamento cancelado no tablet.</string>
+    <string name="connecting_to">Conectando · %1$s</string>
+    <string name="back_again">Toque em Voltar de novo para encerrar a transmissão</string>
+    <string name="update_available_toast">Atualização v%1$s disponível: abra o painel (três dedos) para instalar</string>
+    <string name="update_button">Atualizar para v%1$s</string>
+    <string name="record_no_stream">sem transmissão ativa</string>
+    <string-array name="thermal_states">
+        <item>normal</item>
+        <item>leve</item>
+        <item>moderado</item>
+        <item>severo</item>
+        <item>crítico</item>
+        <item>emergência</item>
+        <item>desligando</item>
+        <item>n/d</item>
+    </string-array>
 </resources>

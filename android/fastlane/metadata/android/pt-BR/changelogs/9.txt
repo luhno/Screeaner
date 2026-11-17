@@ -1,0 +1,4 @@
+0.7.2
+• Modo favorito: marque ★ no Mac e o tablet conecta sozinho, sem código
+• Com favoritos, os outros tablets pedem aprovação no Mac
+• O tablet favorito reconecta mais rápido pelo Wi‑Fi, sem esperar a busca

@@ -1,0 +1,7 @@
+0.7.1
+• Connection page scrolls and fits small tablets, portrait and split screen
+• Keyboard no longer covers the IP field; Connect tries right away
+• The pen works with the palm resting on the screen
+• Changing mode or options no longer freezes the screen
+• Recording and updates no longer block the app
+• Back asks for confirmation while streaming

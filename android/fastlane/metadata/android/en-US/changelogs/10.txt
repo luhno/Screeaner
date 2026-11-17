@@ -1,0 +1,6 @@
+0.8.0
+• Detects the tablet's keyboard, mouse and trackpad and adapts
+• Letters and accents follow the tablet's layout, on any Mac
+• Ctrl becomes ⌘ on PC keyboards
+• Trackpad: instant clicks, two-finger scroll, pinch and three-finger swipes
+• Instant cursor and a whole-Mac trackpad mode

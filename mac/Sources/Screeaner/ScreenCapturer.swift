@@ -14,8 +14,22 @@ enum CaptureError: LocalizedError {
 final class ScreenCapturer: NSObject, SCStreamOutput, SCStreamDelegate {
     private let queue: DispatchQueue
     private let audioQueue = DispatchQueue(label: "screeaner.audio", qos: .userInteractive)
-    private var stream: SCStream?
+    private let lock = NSLock()
+    private var stream: SCStream?            // guarded by `lock`
     private var configuration: SCStreamConfiguration?
+    /// Set by `stop()`; a `start()` still in flight checks it and stops itself,
+    /// so a session that ends during the first seconds never leaves a capture running.
+    private var cancelled = false            // guarded by `lock`
+
+    private var isCancelled: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return cancelled
+    }
+
+    /// Whether the Mac's cursor is drawn into the video. Off while the tablet draws its
+    /// own cursor for a mouse or trackpad (instant, no stream latency). Set before `start`.
+    var showsCursor = true
 
     /// Called on `queue` for every frame whose content actually changed.
     var onFrame: ((CVPixelBuffer) -> Void)?
@@ -31,6 +45,7 @@ final class ScreenCapturer: NSObject, SCStreamOutput, SCStreamDelegate {
         // A freshly created virtual display takes a moment to be listed.
         var target: SCDisplay?
         for _ in 0..<30 {
+            guard !isCancelled else { return }
             let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
             target = content.displays.first { $0.displayID == displayID }
             if target != nil { break }
@@ -43,7 +58,7 @@ final class ScreenCapturer: NSObject, SCStreamOutput, SCStreamDelegate {
         config.height = height
         config.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(fps))
         config.pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
-        config.showsCursor = true
+        config.showsCursor = showsCursor
         config.colorSpaceName = CGColorSpace.sRGB
         // Size of the surface pool, not a latency buffer. We keep one frame
         // around for keyframe re-sends and the encoder may hold another.
@@ -67,21 +82,46 @@ final class ScreenCapturer: NSObject, SCStreamOutput, SCStreamDelegate {
             try stream.addStreamOutput(self, type: .audio, sampleHandlerQueue: audioQueue)
         }
         try await stream.startCapture()
-        self.stream = stream
-        self.configuration = config
+        lock.lock()
+        let stopNow = cancelled
+        if !stopNow {
+            self.stream = stream
+            self.configuration = config
+        }
+        lock.unlock()
+        if stopNow { try? await stream.stopCapture() }
     }
 
     /// New output size without restarting the capture (tablet rotation).
     func update(width: Int, height: Int) async throws {
-        guard let stream, let config = configuration else { return }
+        lock.lock()
+        let stream = self.stream
+        let config = configuration
+        lock.unlock()
+        guard let stream, let config else { return }
         config.width = width
         config.height = height
         try await stream.updateConfiguration(config)
     }
 
+    /// Shows or hides the Mac's cursor in the video without restarting the capture.
+    func setShowsCursor(_ shows: Bool) async throws {
+        lock.lock()
+        showsCursor = shows
+        let stream = self.stream
+        let config = configuration
+        lock.unlock()
+        guard let stream, let config, config.showsCursor != shows else { return }
+        config.showsCursor = shows
+        try await stream.updateConfiguration(config)
+    }
+
     func stop() {
+        lock.lock()
+        cancelled = true
         let stream = self.stream
         self.stream = nil
+        lock.unlock()
         stream?.stopCapture { _ in }
     }
 

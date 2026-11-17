@@ -5,15 +5,16 @@ import android.app.AlertDialog
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
+import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
-import android.graphics.RectF
 import android.view.InputDevice
 import android.view.KeyEvent
 import android.view.MotionEvent
+import android.view.PointerIcon
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.View
@@ -21,42 +22,71 @@ import android.view.ViewConfiguration
 import android.view.WindowInsets
 import android.view.WindowInsetsController
 import android.view.WindowManager
+import android.view.ViewGroup
+import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.Spinner
 import android.widget.TextView
+import android.widget.Toast
+import java.io.File
 import java.util.Locale
 import java.util.UUID
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.math.hypot
 import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.roundToInt
 
 class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
     private lateinit var surfaceView: SurfaceView
     private lateinit var overlay: View
     private lateinit var statusText: TextView
+    private lateinit var statusLabel: TextView
+    private lateinit var radar: RadarView
+    private lateinit var latencyValue: TextView
+    private lateinit var latencyPeak: TextView
+    private lateinit var breakdownBar: SegmentBar
+    private lateinit var encoderText: TextView
+    private lateinit var testProgress: DotProgressView
     private lateinit var hud: TextView
     private lateinit var hostInput: EditText
     private lateinit var discovery: Discovery
 
     private val handler = Handler(Looper.getMainLooper())
-    private var client: StreamClient? = null
+    @Volatile private var client: StreamClient? = null
+    /** Settings the benchmark asks of the Mac for the current stream; null = the Mac's own. */
+    private var streamOverride: StreamOverride? = null
+    @Volatile private var benchmark: Benchmark? = null
+    private lateinit var benchmarkButton: Button
+    /** Update versions already offered in this run: asked once, not on every reconnect. */
+    private val updatesAsked = HashSet<Int>()
+    /** The user accepted but first had to allow installs from this app in Settings. */
+    private var updateAfterPermission = false
+    /** A GitHub update accepted before installs from this app were allowed. */
+    private var githubAfterPermission: GitHubUpdate.Release? = null
+    private var optAutoUpdate = true
+    private var updateDialog: AlertDialog? = null
     private var refreshRate = 60f
     private var hudMode = HUD_OFF
     private lateinit var monitor: View
     private lateinit var latencyText: TextView
     private lateinit var performanceText: TextView
     private lateinit var latencyGraph: GraphView
-    private lateinit var fpsGraph: GraphView
     private lateinit var recordButton: Button
     private lateinit var recordInfo: TextView
+    private lateinit var probeButton: Button
+    private lateinit var probeInfo: TextView
+    private var probing = false
     private lateinit var deviceMonitor: DeviceMonitor
     private lateinit var recorder: SessionRecorder
     private var appVersion = "?"
@@ -72,8 +102,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
     private lateinit var shortcutBar: ShortcutBar
     private lateinit var sidebar: View
     private lateinit var clipboardBridge: ClipboardBridge
-    private lateinit var probe: LatencyProbe
-    private lateinit var measureButton: Button
     private lateinit var pairingBox: View
     private lateinit var pairingCode: TextView
     private lateinit var pairingHint: TextView
@@ -81,14 +109,78 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
     private lateinit var pairingCancel: Button
     private var pairingReply: ((Boolean) -> Unit)? = null
     private var pairingMac = "Mac"
-    private var deniedMessage: String? = null
-    private var deniedAt = 0L
     private var optAudio = false
     private var optClipboard = true
     private var optPalm = true
     private var optSidebar = false
-    private var optCtrlIsCmd = false
+    private var cmdKey = CMD_AUTO
+    private var tabletLayout = true
+    private var cursorLocal = true
+    private var trackpadWholeMac = false
+    private var pointerSpeed = 1
+    private var reverseScroll = false
+    private lateinit var inputs: InputDeviceWatcher
+    /** A mouse or trackpad was used since one was connected. */
+    private var pointerSeen = false
+    /** This stream asked the Mac to keep its cursor out of the video. */
+    private var macCursorHidden = false
+
+    private val keyboard by lazy {
+        KeyboardBridge(object : KeyboardBridge.Output {
+            override val supportsText: Boolean get() = client?.extendedInput == true
+            override val modifierLatched: Boolean get() = shortcutBar.hasHeldKeys
+            override fun key(action: Int, keyCode: Int, isRepeat: Boolean, scanCode: Int) {
+                client?.sendKey(action, keyCode, isRepeat, scanCode)
+            }
+            override fun text(action: Int, keyCode: Int, scanCode: Int, isRepeat: Boolean, text: String) {
+                client?.sendText(action, keyCode, scanCode, isRepeat, text)
+            }
+        })
+    }
+
+    private val pointer by lazy {
+        PointerBridge(object : PointerBridge.Output {
+            override val extended: Boolean get() = client?.extendedInput == true
+            override fun touch(action: Int, x: Float, y: Float, button: Int) {
+                client?.sendTouch(action, x, y, if (action == Protocol.ACTION_HOVER) 0f else 1f, button)
+            }
+            override fun scroll(dx: Float, dy: Float, x: Float, y: Float) {
+                client?.sendScroll(dx, dy, x, y)
+            }
+            override fun zoom(phase: Int, delta: Float, x: Float, y: Float) {
+                client?.sendZoom(phase, delta, x, y)
+            }
+            override fun mouse(kind: Int, button: Int, a: Float, b: Float, x: Float, y: Float) {
+                client?.sendMouse(kind, button, a, b, x, y)
+            }
+            override fun shortcut(vararg keyCodes: Int) {
+                val current = client ?: return
+                keyCodes.forEach { current.sendKey(0, it, false) }
+                keyCodes.reversed().forEach { current.sendKey(1, it, false) }
+            }
+            override fun sawPointer() {
+                if (pointerSeen) return
+                pointerSeen = true
+                applyCursor()
+            }
+        })
+    }
     private var shortcuts: Set<String> = ShortcutBar.DEFAULT
+    private var wifiLock: WifiManager.WifiLock? = null
+    private lateinit var overlayScroll: ScrollView
+    private lateinit var noticeText: TextView
+    private lateinit var updateButton: Button
+    /** An update offered while streaming: shown as a button in the monitor instead of a dialog. */
+    private var pendingOffer: StreamClient.UpdateOffer? = null
+    /** Session files are written off the UI thread, in order. */
+    private val io: ExecutorService = Executors.newSingleThreadExecutor()
+    /** A stopped client still releasing the Surface; its successor waits for it. */
+    private var retiring: StreamClient? = null
+    private var clientGeneration = 0
+    private var lastBackAt = 0L
+    private var lastLayoutWidth = 0
+    private var lastLayoutHeight = 0
+    private val hideNotice = Runnable { noticeText.visibility = View.GONE }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -102,6 +194,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
         surfaceView = findViewById(R.id.surface)
         overlay = findViewById(R.id.overlay)
         statusText = findViewById(R.id.status)
+        statusLabel = findViewById(R.id.statusLabel)
+        radar = findViewById(R.id.radar)
+        overlay.background = DotGridDrawable(this)
         hud = findViewById(R.id.hud)
         hostInput = findViewById(R.id.hostInput)
         discovery = Discovery(applicationContext)
@@ -115,23 +210,39 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
             prefs.edit().putString(PREF_DEVICE_ID, it).apply()
         }
         hostInput.setText(manualHost ?: "")
+        hudMode = prefs.getInt(PREF_HUD, HUD_OFF)
+        // First launch of a new version (after an update from the Mac or GitHub): say so.
+        val runningVersion = appVersion.substringBefore(' ')
+        prefs.getString(PREF_LAST_VERSION, null)?.let { previous ->
+            if (GitHubUpdate.isNewer(runningVersion, previous)) {
+                Toast.makeText(this, getString(R.string.updated_to, runningVersion, previous), Toast.LENGTH_LONG).show()
+            }
+        }
+        prefs.edit().putString(PREF_LAST_VERSION, runningVersion).apply()
+        savedInstanceState?.getIntArray(STATE_UPDATES_ASKED)?.let { asked -> updatesAsked += asked.toList() }
         setUpDisplayOptions(prefs)
         loadOptions()
         setUpPairing()
         setUpExtras()
-        findViewById<Button>(R.id.connect).setOnClickListener {
-            manualHost = hostInput.text.toString().trim()
-            prefs.edit().putString(PREF_HOST, manualHost).apply()
-            (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager)
-                .hideSoftInputFromWindow(hostInput.windowToken, 0)
-            hostInput.clearFocus()
-            enterImmersive()
+        setUpResponsiveLayout()
+        findViewById<Button>(R.id.connect).setOnClickListener { connectNow() }
+        hostInput.setOnEditorActionListener { _, actionId, _ ->
+            if (actionId == EditorInfo.IME_ACTION_DONE || actionId == EditorInfo.IME_ACTION_GO) {
+                connectNow()
+                true
+            } else {
+                false
+            }
         }
 
         selectFastestDisplayMode()
         touchSlop = ViewConfiguration.get(this).scaledTouchSlop.toFloat()
         surfaceView.setOnTouchListener { _, event -> onSurfaceTouch(event) }
         surfaceView.setOnHoverListener { view, event ->
+            // A mouse or trackpad: the Mac's cursor follows the tablet's.
+            if (pointer.onGeneric(event, max(1, view.width).toFloat(), max(1, view.height).toFloat())) {
+                return@setOnHoverListener true
+            }
             updatePen(event)
             val x = event.x / max(1, view.width)
             val y = event.y / max(1, view.height)
@@ -148,54 +259,202 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
             }
             true
         }
-        // A mouse or trackpad attached to the tablet: wheel / two-finger scroll.
+        // A mouse or trackpad attached to the tablet: wheel, buttons.
         surfaceView.setOnGenericMotionListener { view, event ->
-            if (event.actionMasked == MotionEvent.ACTION_SCROLL && event.isFromSource(InputDevice.SOURCE_CLASS_POINTER)) {
-                client?.sendScroll(
-                    -event.getAxisValue(MotionEvent.AXIS_HSCROLL) * WHEEL_STEP,
-                    event.getAxisValue(MotionEvent.AXIS_VSCROLL) * WHEEL_STEP,
-                    event.x / view.width, event.y / view.height,
-                )
-                true
-            } else {
-                false
+            when {
+                pointer.onGeneric(event, max(1, view.width).toFloat(), max(1, view.height).toFloat()) -> true
+                event.actionMasked == MotionEvent.ACTION_SCROLL && event.isFromSource(InputDevice.SOURCE_CLASS_POINTER) -> {
+                    client?.sendScroll(
+                        -event.getAxisValue(MotionEvent.AXIS_HSCROLL) * WHEEL_STEP,
+                        event.getAxisValue(MotionEvent.AXIS_VSCROLL) * WHEEL_STEP,
+                        event.x / max(1, view.width), event.y / max(1, view.height),
+                    )
+                    true
+                }
+                else -> false
             }
         }
+        // "Mac inteiro": the trackpad moves the Mac's cursor across every screen.
+        surfaceView.setOnCapturedPointerListener { _, event -> pointer.onCaptured(event) }
+        inputs = InputDeviceWatcher(applicationContext) { devices -> onInputDevicesChanged(devices) }
+        applyInputPrefs()
         surfaceView.holder.addCallback(this)
+        // Android batches input to the next vsync by default; deliver every
+        // touch, stylus, hover and mouse sample the moment it arrives instead.
+        if (Build.VERSION.SDK_INT >= 30) {
+            surfaceView.requestUnbufferedDispatch(
+                InputDevice.SOURCE_CLASS_POINTER or InputDevice.SOURCE_CLASS_POSITION,
+            )
+        }
+    }
+
+    /**
+     * Keeps the Wi-Fi radio out of power save while streaming: power save
+     * parks the radio between beacons and adds 50–100 ms spikes. Low-latency
+     * mode (Android 10+) also tells the driver to favour latency over battery.
+     */
+    private fun holdWifi(hold: Boolean) {
+        if (!hold) {
+            wifiLock?.takeIf { it.isHeld }?.release()
+            return
+        }
+        val lock = wifiLock ?: run {
+            val wifi = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager ?: return
+            @Suppress("DEPRECATION")
+            val mode = if (Build.VERSION.SDK_INT >= 29) {
+                WifiManager.WIFI_MODE_FULL_LOW_LATENCY
+            } else {
+                WifiManager.WIFI_MODE_FULL_HIGH_PERF
+            }
+            wifi.createWifiLock(mode, "screeaner:stream").apply { setReferenceCounted(false) }
+                .also { wifiLock = it }
+        }
+        if (!lock.isHeld) lock.acquire()
     }
 
     /** A keyboard attached to the tablet types on the Mac while streaming. */
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-        val current = client
-        if (current != null && streaming && !event.isSystem) {
-            var code = event.keyCode
-            if (optCtrlIsCmd) {
-                // PC keyboards: Ctrl+C / Ctrl+V and friends behave like on the Mac.
-                code = when (code) {
-                    KeyEvent.KEYCODE_CTRL_LEFT -> KeyEvent.KEYCODE_META_LEFT
-                    KeyEvent.KEYCODE_CTRL_RIGHT -> KeyEvent.KEYCODE_META_RIGHT
-                    KeyEvent.KEYCODE_META_LEFT -> KeyEvent.KEYCODE_CTRL_LEFT
-                    KeyEvent.KEYCODE_META_RIGHT -> KeyEvent.KEYCODE_CTRL_RIGHT
-                    else -> code
-                }
-            }
-            when (event.action) {
-                KeyEvent.ACTION_DOWN -> current.sendKey(0, code, event.repeatCount > 0, event.scanCode)
-                KeyEvent.ACTION_UP -> current.sendKey(1, code, false, event.scanCode)
-            }
+        if (client != null && streaming && !event.isSystem) {
+            keyboard.handle(event)
             return true
         }
         return super.dispatchKeyEvent(event)
     }
 
-    // region Options, pairing, shortcuts, clipboard and end-to-end probe
+    /** "Conectar" (or Done on the keyboard): use the typed IP and try every Mac again right away. */
+    private fun connectNow() {
+        manualHost = hostInput.text.toString().trim()
+        prefs.edit().putString(PREF_HOST, manualHost).apply()
+        hideKeyboard()
+        enterImmersive()
+        client?.forgetFailures()
+        statusLabel.text = getString(R.string.connecting_to, manualHost?.ifEmpty { null } ?: "USB · Wi‑Fi")
+        if (client != null || retiring != null) reconnect() else handler.post(restartClient)
+    }
+
+    private fun hideKeyboard() {
+        (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager)
+            .hideSoftInputFromWindow(hostInput.windowToken, 0)
+        hostInput.clearFocus()
+    }
+
+    /** Runs file work off the UI thread, in order; ignored once the activity is gone. */
+    private fun background(work: () -> Unit) {
+        if (io.isShutdown) return
+        try {
+            io.execute(work)
+        } catch (_: java.util.concurrent.RejectedExecutionException) {
+        }
+    }
+
+    /** Shows a message under the status (refusals, errors) for a while, in a readable size. */
+    private fun showNotice(text: String) {
+        handler.removeCallbacks(hideNotice)
+        noticeText.text = text
+        noticeText.visibility = View.VISIBLE
+        handler.postDelayed(hideNotice, NOTICE_MS)
+    }
+
+    // region Responsive layout
+
+    private fun setUpResponsiveLayout() {
+        overlayScroll = findViewById(R.id.overlayScroll)
+        noticeText = findViewById(R.id.notice)
+        val root = findViewById<ViewGroup>(android.R.id.content).getChildAt(0)
+        root.addOnLayoutChangeListener { _, left, top, right, bottom, _, _, _, _ ->
+            val w = right - left
+            val h = bottom - top
+            if (w != lastLayoutWidth || h != lastLayoutHeight) {
+                lastLayoutWidth = w
+                lastLayoutHeight = h
+                // Not during layout: changing sizes here would request another one.
+                handler.post { adaptLayout(w, h) }
+            }
+        }
+        // Keyboard and camera cutout: pad what they would cover.
+        root.setOnApplyWindowInsetsListener { _, insets ->
+            applyInsets(insets)
+            insets
+        }
+    }
+
+    /** Fits the pages to the window: phones, small tablets, portrait and split screen. */
+    private fun adaptLayout(widthPx: Int, heightPx: Int) {
+        val density = resources.displayMetrics.density
+        val widthDp = widthPx / density
+        val heightDp = heightPx / density
+        // The radar is decoration: it only stays when the text column keeps ~400dp.
+        radar.visibility = if (widthDp >= 760) View.VISIBLE else View.GONE
+        val side = ((if (widthDp >= 720) 56 else if (widthDp >= 480) 32 else 18) * density).toInt()
+        val vertical = ((if (heightDp >= 640) 40 else 16) * density).toInt()
+        overlay.setPadding(side, vertical, side, vertical)
+        // The monitor is at most 408dp, and never wider than the window minus its margins.
+        (monitor.layoutParams as? ViewGroup.MarginLayoutParams)?.let { params ->
+            val width = min((408 * density).toInt(), widthPx - params.leftMargin - params.rightMargin)
+            if (params.width != width) {
+                params.width = width
+                monitor.layoutParams = params
+            }
+        }
+    }
+
+    private fun applyInsets(insets: WindowInsets) {
+        val density = resources.displayMetrics.density
+        var imeBottom = 0
+        var cutLeft = 0
+        var cutTop = 0
+        var cutRight = 0
+        if (Build.VERSION.SDK_INT >= 30) {
+            imeBottom = insets.getInsets(WindowInsets.Type.ime()).bottom
+            val cut = insets.getInsets(WindowInsets.Type.displayCutout())
+            cutLeft = cut.left
+            cutTop = cut.top
+            cutRight = cut.right
+        } else if (Build.VERSION.SDK_INT >= 28) {
+            insets.displayCutout?.let {
+                cutLeft = it.safeInsetLeft
+                cutTop = it.safeInsetTop
+                cutRight = it.safeInsetRight
+            }
+        }
+        // Room to scroll the IP field above the keyboard.
+        overlayScroll.setPadding(0, 0, 0, imeBottom)
+        if (imeBottom > 0 && hostInput.hasFocus()) {
+            overlayScroll.post { overlayScroll.smoothScrollTo(0, max(0, hostInput.bottom + (24 * density).toInt())) }
+        }
+        fun margins(view: View, base: Int, gravityEnd: Boolean) {
+            val params = view.layoutParams as? ViewGroup.MarginLayoutParams ?: return
+            val px = (base * density).toInt()
+            params.topMargin = px + cutTop
+            if (gravityEnd) params.rightMargin = px + cutRight else params.leftMargin = px + cutLeft
+            view.layoutParams = params
+        }
+        margins(hud, 12, gravityEnd = false)
+        margins(monitor, 16, gravityEnd = true)
+        (sidebar.layoutParams as? ViewGroup.MarginLayoutParams)?.let {
+            it.leftMargin = (8 * density).toInt() + cutLeft
+            sidebar.layoutParams = it
+        }
+    }
+
+    // endregion
+
+    // region Options, pairing, shortcuts and clipboard
 
     private fun loadOptions() {
         optAudio = prefs.getBoolean(PREF_AUDIO, false)
         optClipboard = prefs.getBoolean(PREF_CLIPBOARD, true)
         optPalm = prefs.getBoolean(PREF_PALM, true)
         optSidebar = prefs.getBoolean(PREF_SIDEBAR, false)
-        optCtrlIsCmd = prefs.getBoolean(PREF_CTRL_CMD, false)
+        optAutoUpdate = prefs.getBoolean(PREF_AUTO_UPDATE, true)
+        // 0.7 had a single "Ctrl works as ⌘" switch.
+        val legacyCtrl = if (prefs.getBoolean(PREF_CTRL_CMD, false)) CMD_CTRL else CMD_AUTO
+        cmdKey = prefs.getString(PREF_CMD_KEY, null)?.takeIf { it in CMD_VALUES } ?: legacyCtrl
+        tabletLayout = prefs.getBoolean(PREF_TABLET_LAYOUT, true)
+        cursorLocal = prefs.getBoolean(PREF_CURSOR_LOCAL, true)
+        trackpadWholeMac = prefs.getBoolean(PREF_TRACKPAD_MAC, false)
+        pointerSpeed = prefs.getInt(PREF_POINTER_SPEED, 1).coerceIn(0, POINTER_SPEEDS.size - 1)
+        reverseScroll = prefs.getBoolean(PREF_REVERSE_SCROLL, false)
         shortcuts = prefs.getStringSet(PREF_SHORTCUTS, null)?.toSet() ?: ShortcutBar.DEFAULT
     }
 
@@ -225,20 +484,28 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
         }
         shortcutBar.build(shortcuts)
         clipboardBridge = ClipboardBridge(this) { text -> if (optClipboard) client?.sendClipboard(text) }
-        probe = LatencyProbe(surfaceView) { client }
-        measureButton = findViewById(R.id.measure)
-        measureButton.setOnClickListener { runProbe() }
         findViewById<Button>(R.id.options).setOnClickListener { showOptions() }
         findViewById<Button>(R.id.monitorOptions).setOnClickListener { showOptions() }
+        findViewById<Button>(R.id.monitorClose).setOnClickListener { setHudMode(HUD_OFF) }
+        updateButton = findViewById(R.id.updateButton)
+        updateButton.setOnClickListener { pendingOffer?.let { showUpdateDialog(it) } }
+    }
+
+    private fun setHudMode(mode: Int) {
+        hudMode = mode
+        prefs.edit().putInt(PREF_HUD, mode).apply()
+        applyHudMode()
     }
 
     private fun applySidebar() {
-        sidebar.visibility = if (streaming && optSidebar) View.VISIBLE else View.GONE
-        if (!streaming) shortcutBar.releaseAll()
+        val visible = streaming && optSidebar
+        sidebar.visibility = if (visible) View.VISIBLE else View.GONE
+        // A latched ⌘ must never stay down on the Mac with no button left to release it.
+        if (!visible) shortcutBar.releaseAll()
     }
 
     private fun showOptions() {
-        val values = booleanArrayOf(optAudio, optClipboard, optPalm, optSidebar, optCtrlIsCmd)
+        val values = booleanArrayOf(optAudio, optClipboard, optPalm, optSidebar, optAutoUpdate)
         AlertDialog.Builder(this)
             .setTitle(R.string.options_title)
             .setMultiChoiceItems(R.array.option_labels, values) { _, index, checked -> values[index] = checked }
@@ -248,20 +515,137 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
                 optClipboard = values[1]
                 optPalm = values[2]
                 optSidebar = values[3]
-                optCtrlIsCmd = values[4]
+                val autoUpdateTurnedOn = values[4] && !optAutoUpdate
+                optAutoUpdate = values[4]
                 prefs.edit()
                     .putBoolean(PREF_AUDIO, optAudio).putBoolean(PREF_CLIPBOARD, optClipboard)
                     .putBoolean(PREF_PALM, optPalm).putBoolean(PREF_SIDEBAR, optSidebar)
-                    .putBoolean(PREF_CTRL_CMD, optCtrlIsCmd)
+                    .putBoolean(PREF_AUTO_UPDATE, optAutoUpdate)
                     .apply()
+                if (autoUpdateTurnedOn) checkGitHub(force = true)
                 applySidebar()
                 // Audio and clipboard are agreed when connecting.
                 if (reconnect) reconnect()
             }
-            .setNeutralButton(R.string.options_shortcuts) { _, _ -> showShortcuts() }
+            .setNeutralButton(R.string.options_input) { _, _ -> showInputOptions() }
             .setNegativeButton(R.string.options_forget) { _, _ -> confirmForget() }
             .show()
     }
+
+    // region Keyboard, mouse and trackpad
+
+    private fun onInputDevicesChanged(devices: InputDeviceWatcher.Devices) {
+        if (!devices.hasPointer) pointerSeen = false
+        applyInputPrefs()
+        if (devices.keyboard != null || devices.hasPointer) {
+            Toast.makeText(this, getString(R.string.input_connected, describeInputs(devices)), Toast.LENGTH_LONG).show()
+        }
+    }
+
+    /** "Teclado K380 (Ctrl = ⌘) · Trackpad …" */
+    private fun describeInputs(devices: InputDeviceWatcher.Devices = inputs.devices): String {
+        val parts = ArrayList<String>()
+        devices.keyboard?.let {
+            parts += getString(R.string.input_keyboard, it.name, getString(if (keyboard.swapCtrlCmd) R.string.cmd_is_ctrl else R.string.cmd_is_cmd))
+        }
+        devices.touchpad?.let { parts += getString(R.string.input_touchpad, it.name) }
+        devices.mouse?.let { parts += getString(R.string.input_mouse, it.name) }
+        return if (parts.isEmpty()) getString(R.string.input_none) else parts.joinToString(" · ")
+    }
+
+    private fun applyInputPrefs() {
+        keyboard.swapCtrlCmd = when (cmdKey) {
+            CMD_CTRL -> true
+            CMD_META -> false
+            else -> !inputs.devices.keyboardIsApple // PC keyboards: Android keeps the Windows key for itself
+        }
+        keyboard.tabletLayout = tabletLayout
+        pointer.speed = POINTER_SPEEDS[pointerSpeed]
+        pointer.reverseScroll = reverseScroll
+        applyCursor()
+        applyPointerCapture()
+    }
+
+    /**
+     * One cursor only. Instant (default): Android draws it with no stream latency and
+     * the Mac keeps its own out of the video. Otherwise the Mac's, which shows its shapes.
+     */
+    private fun applyCursor() {
+        surfaceView.pointerIcon = if (cursorLocal) null else PointerIcon.getSystemIcon(this, PointerIcon.TYPE_NULL)
+        val current = client ?: return
+        if (!streaming || !current.extendedInput) return
+        val hideMac = cursorLocal && pointerSeen && !surfaceView.hasPointerCapture()
+        if (hideMac != macCursorHidden) {
+            current.sendMouse(Protocol.MOUSE_CURSOR, if (hideMac) 0 else 1, 0f, 0f)
+            macCursorHidden = hideMac
+        }
+    }
+
+    private fun applyPointerCapture() {
+        val want = streaming && trackpadWholeMac && inputs.devices.hasPointer &&
+            client?.extendedInput == true && hasWindowFocus()
+        if (want && !surfaceView.hasPointerCapture()) {
+            surfaceView.isFocusableInTouchMode = true
+            surfaceView.requestFocus()
+            surfaceView.requestPointerCapture()
+        } else if (!want && surfaceView.hasPointerCapture()) {
+            surfaceView.releasePointerCapture()
+        }
+    }
+
+    override fun onPointerCaptureChanged(hasCapture: Boolean) {
+        super.onPointerCaptureChanged(hasCapture)
+        if (!hasCapture) pointer.releaseAll()
+        applyCursor()
+    }
+
+    private fun showInputOptions() {
+        val speeds = resources.getStringArray(R.array.pointer_speeds)
+        val cmdLabel = when (cmdKey) {
+            CMD_CTRL -> getString(R.string.cmd_ctrl)
+            CMD_META -> getString(R.string.cmd_meta)
+            else -> getString(R.string.cmd_auto, getString(if (keyboard.swapCtrlCmd) R.string.cmd_is_ctrl else R.string.cmd_is_cmd))
+        }
+        val items = arrayOf(
+            describeInputs(),
+            getString(R.string.input_cmd, cmdLabel),
+            getString(R.string.input_chars, getString(if (tabletLayout) R.string.chars_tablet else R.string.chars_mac)),
+            getString(R.string.input_cursor, getString(if (cursorLocal) R.string.cursor_local else R.string.cursor_mac)),
+            getString(R.string.input_trackpad, getString(if (trackpadWholeMac) R.string.trackpad_mac else R.string.trackpad_screen)),
+            getString(R.string.input_speed, speeds[pointerSpeed]),
+            getString(R.string.input_scroll, getString(if (reverseScroll) R.string.scroll_reverse else R.string.scroll_natural)),
+            getString(R.string.options_shortcuts),
+        )
+        if (streaming && client?.extendedInput == false) showNotice(getString(R.string.input_old_mac))
+        AlertDialog.Builder(this)
+            .setTitle(R.string.input_title)
+            .setItems(items) { _, which ->
+                when (which) {
+                    1 -> cmdKey = CMD_VALUES[(CMD_VALUES.indexOf(cmdKey) + 1) % CMD_VALUES.size]
+                    2 -> tabletLayout = !tabletLayout
+                    3 -> cursorLocal = !cursorLocal
+                    4 -> trackpadWholeMac = !trackpadWholeMac
+                    5 -> pointerSpeed = (pointerSpeed + 1) % POINTER_SPEEDS.size
+                    6 -> reverseScroll = !reverseScroll
+                    7 -> {
+                        showShortcuts()
+                        return@setItems
+                    }
+                }
+                prefs.edit()
+                    .putString(PREF_CMD_KEY, cmdKey).putBoolean(PREF_TABLET_LAYOUT, tabletLayout)
+                    .putBoolean(PREF_CURSOR_LOCAL, cursorLocal).putBoolean(PREF_TRACKPAD_MAC, trackpadWholeMac)
+                    .putInt(PREF_POINTER_SPEED, pointerSpeed).putBoolean(PREF_REVERSE_SCROLL, reverseScroll)
+                    .apply()
+                keyboard.reset()
+                applyInputPrefs()
+                showInputOptions() // stays open, showing the new values
+            }
+            .setPositiveButton(R.string.ok, null)
+            .show()
+    }
+
+    // endregion
 
     private fun showShortcuts() {
         val all = ShortcutBar.ALL
@@ -293,29 +677,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
 
     /** Drops the connection and starts over with the current settings. */
     private fun reconnect() {
-        if (client == null) return
+        if (client == null && retiring == null) return
         handler.removeCallbacks(restartClient)
-        client?.stop()
-        client = null
-        restartClient.run()
-    }
-
-    private fun runProbe() {
-        measureButton.isEnabled = false
-        recordInfo.text = getString(R.string.measuring)
-        probe.run { result ->
-            measureButton.isEnabled = true
-            if (result == null || result.samples.isEmpty()) {
-                recordInfo.text = getString(R.string.measure_failed)
-                return@run
-            }
-            val text = getString(
-                R.string.measure_result, format("%.1f", result.average), format("%.1f", result.minimum),
-                format("%.1f", result.p95), result.samples.size, result.attempts,
-            )
-            recordInfo.text = text
-            recorder.note(text)
-        }
+        startClient(force = true)
     }
 
     // endregion
@@ -381,32 +745,141 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
             "?"
         }
         val about = "Screeaner v$appVersion · Android ${Build.VERSION.RELEASE} · ${Build.MODEL}"
-        findViewById<TextView>(R.id.version).text = about
+        findViewById<TextView>(R.id.version).text = "$about   ·   ${getString(R.string.footer_gestures)}"
 
         monitor = findViewById(R.id.monitor)
         latencyText = findViewById(R.id.latencyText)
         performanceText = findViewById(R.id.performanceText)
         latencyGraph = findViewById(R.id.latencyGraph)
-        fpsGraph = findViewById(R.id.fpsGraph)
+        latencyValue = findViewById(R.id.latencyValue)
+        latencyPeak = findViewById(R.id.latencyPeak)
+        breakdownBar = findViewById(R.id.breakdownBar)
+        encoderText = findViewById(R.id.encoderText)
+        testProgress = findViewById(R.id.testProgress)
         recordButton = findViewById(R.id.record)
         recordInfo = findViewById(R.id.recordInfo)
-        findViewById<TextView>(R.id.monitorTitle).text = about
-        latencyGraph.configure(
-            "ms", 20f,
-            "total" to 0xFFFFFFFF.toInt(), "dec" to 0xFFFFB454.toInt(),
-            "rede" to 0xFF7CFFB2.toInt(), "enc" to 0xFF4F8CFF.toInt(),
-        )
-        fpsGraph.configure("fps", 30f, "fps" to 0xFF7CFFB2.toInt(), "Mbps" to 0xFF4F8CFF.toInt())
+        findViewById<TextView>(R.id.monitorTitle).text = getString(R.string.monitor_title, appVersion, Build.MODEL ?: "")
+        // Red dots mark seconds clearly worse than a good stream (over ~2 frames at 60 Hz).
+        latencyGraph.configure("ms", 20f, alertAbove = 36f)
 
         deviceMonitor = DeviceMonitor(applicationContext)
         recorder = SessionRecorder(applicationContext)
         recordButton.setOnClickListener { toggleRecording() }
-        findViewById<Button>(R.id.share).setOnClickListener { shareLastSession() }
+        probeButton = findViewById(R.id.probe)
+        probeInfo = findViewById(R.id.probeInfo)
+        probeButton.setOnClickListener { toggleLatencyTest() }
+        benchmarkButton = findViewById(R.id.benchmark)
+        benchmarkButton.setOnClickListener { toggleBenchmark() }
+        findViewById<View>(R.id.share).setOnClickListener { shareLastSession() }
     }
 
     private fun applyHudMode() {
         hud.visibility = if (streaming && hudMode == HUD_COMPACT) View.VISIBLE else View.GONE
         monitor.visibility = if (streaming && hudMode == HUD_FULL) View.VISIBLE else View.GONE
+    }
+
+    private fun toggleLatencyTest() {
+        if (benchmark != null) {
+            probeInfo.text = getString(R.string.benchmark_busy)
+            return
+        }
+        val current = client
+        if (probing) {
+            current?.cancelLatencyTest()
+            return
+        }
+        val started = current?.startLatencyTest(object : LatencyTest.Listener {
+            override fun onProgress(done: Int, total: Int, lastMs: Double) = runOnUiThread {
+                probeButton.text = getString(R.string.probe_running, done, total)
+                testProgress.set(1, total, done)
+                probeInfo.text = getString(R.string.probe_last, format("%.1f", lastMs))
+            }
+
+            override fun onFinished(result: LatencyTest.Result) = runOnUiThread { showLatencyResult(result) }
+        }) ?: false
+        if (started) {
+            probing = true
+            probeButton.text = getString(R.string.probe_running, 0, LatencyTest.SAMPLES)
+            probeInfo.text = getString(R.string.probe_started)
+            testProgress.set(1, LatencyTest.SAMPLES, 0)
+            testProgress.visibility = View.VISIBLE
+        } else {
+            probeInfo.text = getString(R.string.probe_unavailable)
+        }
+    }
+
+    private fun showLatencyResult(result: LatencyTest.Result) {
+        probing = false
+        probeButton.text = getString(R.string.probe_start)
+        testProgress.visibility = View.GONE
+        val lines = result.lines()
+        val problem = when (result.outcome) {
+            LatencyTest.Outcome.NO_MAC -> getString(R.string.probe_no_mac)
+            LatencyTest.Outcome.NO_SQUARE -> getString(R.string.probe_no_square)
+            LatencyTest.Outcome.CANCELLED -> getString(R.string.probe_cancelled)
+            LatencyTest.Outcome.DONE -> null
+        }
+        probeInfo.text = (lines + listOfNotNull(problem)).joinToString("\n")
+        if (lines.isNotEmpty()) background { recorder.note(lines) }
+    }
+
+    private fun toggleBenchmark() {
+        benchmark?.let {
+            it.cancel()
+            return
+        }
+        val info = client?.streamInfo
+        if (!streaming || info == null || probing) {
+            probeInfo.text = getString(R.string.probe_unavailable)
+            return
+        }
+        val configs = Benchmark.configsFor(VideoDecoder.supportedCodecs(info.width, info.height), refreshRate.roundToInt())
+        val setup = listOf(
+            "tablet: ${Build.MANUFACTURER} ${Build.MODEL} · Android ${Build.VERSION.RELEASE} · app $appVersion",
+            "mac: ${info.macName} · app ${info.macVersion}",
+            "stream: ${info.width}x${info.height} · painel ${refreshRate.roundToInt()} Hz",
+        )
+        val run = Benchmark(
+            host = object : Benchmark.Host {
+                override fun restartStream(override: StreamOverride?) = runOnUiThread {
+                    streamOverride = override
+                    startClient(force = true)
+                }
+
+                override fun currentClient(): StreamClient? = client
+            },
+            configs = configs,
+            listener = object : Benchmark.Listener {
+                override fun onStep(text: String) = runOnUiThread { probeInfo.text = text }
+                override fun onProgress(done: Int, total: Int) = runOnUiThread {
+                    testProgress.set(configs.size, Benchmark.PHASES, done)
+                }
+                override fun onFinished(report: Benchmark.Report) = runOnUiThread { showBenchmark(report, setup) }
+            },
+        )
+        benchmark = run
+        benchmarkButton.text = getString(R.string.benchmark_stop)
+        probeInfo.text = getString(R.string.benchmark_started)
+        testProgress.set(configs.size, Benchmark.PHASES, 0)
+        testProgress.visibility = View.VISIBLE
+        run.start()
+    }
+
+    private fun showBenchmark(report: Benchmark.Report, setup: List<String>) {
+        benchmark = null
+        benchmarkButton.text = getString(R.string.benchmark_start)
+        testProgress.visibility = View.GONE
+        val lines = report.lines()
+        probeInfo.text = lines.joinToString("\n")
+        background {
+            val saved = if (report.results.isNotEmpty()) recorder.saveReport(setup, report.csv(), lines) else null
+            if (recorder.isRecording) recorder.note(lines)
+            if (saved != null) {
+                runOnUiThread {
+                    probeInfo.text = (lines + getString(R.string.benchmark_saved, saved)).joinToString("\n")
+                }
+            }
+        }
     }
 
     private fun toggleRecording() {
@@ -415,92 +888,175 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
             return
         }
         val info = client?.streamInfo
+        val stream = if (info == null) {
+            getString(R.string.record_no_stream)
+        } else {
+            "${info.width}x${info.height} · ${info.describe()}"
+        }
         val setup = listOf(
             "tablet: ${Build.MANUFACTURER} ${Build.MODEL} · Android ${Build.VERSION.RELEASE} · app $appVersion",
             "mac: ${info?.macName ?: "?"} · app ${info?.macVersion ?: "?"}",
             "exibição: ${info?.mode ?: displayMode} · posição $displayPosition",
-            "stream: ${info?.width}x${info?.height} · ${info?.codec} · ${info?.fps} fps · painel ${refreshRate.roundToInt()} Hz",
+            "stream: $stream · painel ${refreshRate.roundToInt()} Hz",
         )
-        if (recorder.start(setup)) {
-            recordButton.text = getString(R.string.record_stop, "0:00")
-            recordInfo.text = getString(R.string.record_hint)
-        } else {
-            recordInfo.text = getString(R.string.record_failed)
+        recordButton.isEnabled = false
+        background {
+            val started = recorder.start(setup)
+            runOnUiThread {
+                recordButton.isEnabled = true
+                if (started) {
+                    recordButton.text = getString(R.string.record_stop, "0:00")
+                    recordInfo.text = getString(R.string.record_hint)
+                } else {
+                    recordInfo.text = getString(R.string.record_failed)
+                }
+            }
         }
     }
 
-    private fun stopRecording() {
-        val summary = recorder.stop() ?: return
+    private fun stopRecording(then: (() -> Unit)? = null) {
         recordButton.text = getString(R.string.record_start)
-        val where = summary.publicLocation ?: summary.file.absolutePath
-        recordInfo.text = getString(R.string.record_saved, where) + "\n" + summary.text
+        background {
+            val summary = recorder.stop()
+            runOnUiThread {
+                if (summary != null) {
+                    val where = summary.publicLocation ?: summary.file.absolutePath
+                    recordInfo.text = getString(R.string.record_saved, where) + "\n" + summary.text
+                }
+                then?.invoke()
+            }
+        }
     }
 
-    /** Sends the most recent recording as text, so no file permission is needed. */
+    /**
+     * Sends the most recent recording (or benchmark) as text, so no file
+     * permission is needed. Long sessions keep the header and the summary.
+     */
     private fun shareLastSession() {
-        if (recorder.isRecording) stopRecording()
-        val file = recorder.lastFile()
-        if (file == null) {
-            recordInfo.text = getString(R.string.record_none)
+        if (recorder.isRecording) {
+            stopRecording { shareLastSession() }
             return
         }
-        val text = try {
-            file.readText().take(MAX_SHARED_CHARS)
-        } catch (e: Exception) {
-            recordInfo.text = getString(R.string.record_failed)
-            return
+        background {
+            val file = recorder.lastFile()
+            val text = try {
+                file?.let { recorder.shareText(it) }
+            } catch (e: Exception) {
+                null
+            }
+            runOnUiThread {
+                if (file == null || text == null) {
+                    recordInfo.text = getString(if (file == null) R.string.record_none else R.string.record_failed)
+                    return@runOnUiThread
+                }
+                val send = Intent(Intent.ACTION_SEND)
+                    .setType("text/plain")
+                    .putExtra(Intent.EXTRA_SUBJECT, file.name)
+                    .putExtra(Intent.EXTRA_TEXT, text)
+                startActivity(Intent.createChooser(send, file.name))
+            }
         }
-        val send = Intent(Intent.ACTION_SEND)
-            .setType("text/plain")
-            .putExtra(Intent.EXTRA_SUBJECT, file.name)
-            .putExtra(Intent.EXTRA_TEXT, text)
-        startActivity(Intent.createChooser(send, file.name))
     }
 
     private fun format(pattern: String, vararg args: Any) = String.format(Locale.US, pattern, *args)
     private fun ms(value: Double) = if (value.isNaN()) "–" else format("%.1f", value)
 
     private fun showSample(stream: StreamSample) {
-        val device = deviceMonitor.sample()
-        if (recorder.isRecording) {
-            recorder.append(stream, device)
+        val recording = recorder.isRecording
+        // Battery and thermal readings are binder calls: only when someone looks or records.
+        val device = if (recording || hudMode == HUD_FULL) deviceMonitor.sample() else null
+        if (recording && device != null) {
+            background { recorder.append(stream, device) }
             val seconds = recorder.elapsedSeconds
             recordButton.text = getString(R.string.record_stop, format("%d:%02d", seconds / 60, seconds % 60))
         }
-
-        var compact = format(
-            "%s · %d fps · %.1f Mbps · latência %s ms (enc %.1f · rede %.1f · dec %.1f)",
-            stream.transport, stream.fps, stream.mbps, ms(stream.latencyAvgMs),
-            stream.encodeMs, stream.networkMs, stream.decodeAvgMs,
-        )
-        if (stream.packetLossPct >= 0.1) compact += format(" · perda %.1f%%", stream.packetLossPct)
-        if (recorder.isRecording) compact = "● $compact"
-        hud.text = compact
         // Keep the history rolling even while the panel is hidden.
-        latencyGraph.push(
-            stream.latencyAvgMs.toFloat(), stream.decodeAvgMs.toFloat(),
-            stream.networkMs.toFloat(), stream.encodeMs.toFloat(),
-        )
-        fpsGraph.push(stream.fps.toFloat(), stream.mbps.toFloat())
-        if (hudMode != HUD_FULL) return
+        latencyGraph.push(stream.latencyAvgMs.toFloat())
 
-        latencyText.text = format(
-            "Mac→tela  %s ms   (pico %s ms)\nencode %.1f · rede %.1f · decode %.1f (pico %.1f)",
-            ms(stream.latencyAvgMs), ms(stream.latencyMaxMs),
-            stream.encodeMs, stream.networkMs, stream.decodeAvgMs, stream.decodeMaxMs,
+        if (hudMode == HUD_COMPACT) {
+            var compact = format(
+                "%s   %d fps   %.1f Mbps   %s ms",
+                stream.transport, stream.fps, stream.mbps, ms(stream.latencyAvgMs),
+            )
+            if (stream.packetLossPct >= 0.1) compact += "   " + getString(R.string.hud_loss, format("%.1f", stream.packetLossPct))
+            if (hud.text.toString() != compact) hud.text = compact
+            // The dot turns red while a session is being recorded.
+            val dot = if (recording) R.drawable.dot_signal else R.drawable.dot_ink
+            if (hud.tag != dot) {
+                hud.tag = dot
+                hud.setCompoundDrawablesRelativeWithIntrinsicBounds(dot, 0, 0, 0)
+            }
+        }
+        if (hudMode != HUD_FULL || device == null) return
+
+        latencyValue.text = ms(stream.latencyAvgMs)
+        latencyPeak.text = getString(R.string.monitor_peak, ms(stream.latencyMaxMs))
+        breakdownBar.set(
+            floatArrayOf(
+                stream.encodeMs.toFloat(), stream.networkMs.toFloat(),
+                stream.transferAvgMs.toFloat(), stream.decodeAvgMs.toFloat(),
+            ),
+            intArrayOf(Dot.SIGNAL, Dot.ink(0.45f), Dot.ink(0.7f), Dot.INK),
         )
-        performanceText.text = format(
-            "%s · %d fps · %.1f Mbps · perda %.1f%%\nquadros perdidos %d · keyframes %d\n" +
-                "CPU %.0f%% · mem %.0f MB · bat %d%% %.1f°C · térmico %s",
-            stream.transport, stream.fps, stream.mbps, stream.packetLossPct,
-            stream.framesLost, stream.keyframeRequests,
-            device.cpuPct, device.memoryMb, device.batteryPct, device.batteryTempC, device.thermal,
+        // Large font settings: columns would wrap, so use a flowing line instead.
+        val largeText = resources.configuration.fontScale > 1.15f
+        val parts = arrayOf(
+            format("%.1f", stream.encodeMs), format("%.1f", stream.networkMs),
+            format("%.1f", stream.transferAvgMs), format("%.1f", stream.decodeAvgMs),
         )
+        latencyText.text = getString(if (largeText) R.string.monitor_breakdown else R.string.monitor_breakdown_wide, *parts)
+        val info = client?.streamInfo
+        if (info != null && info.lowLatencyEncoder == false) {
+            encoderText.text = getString(R.string.encoder_normal, info.describe().substringBefore(" · encoder"))
+            encoderText.visibility = View.VISIBLE
+        } else {
+            encoderText.visibility = View.GONE
+        }
+        val headers = getString(R.string.monitor_perf_headers).split('|')
+        val values = listOf(
+            stream.fps.toString(), format("%.1f", stream.mbps), format("%.2f%%", stream.packetLossPct),
+            format("%.0f%%", device.cpuPct), format("%.0f MB", device.memoryMb),
+            format("%d%% %.1f°", device.batteryPct, device.batteryTempC),
+        )
+        val table = if (largeText) {
+            headers.zip(values).joinToString("\n") { (h, v) -> "$h  $v" }
+        } else {
+            format("%-9s %-9s %s\n%-9s %-9s %s\n%-9s %-9s %s\n%-9s %-9s %s",
+                headers[0], headers[1], headers[2], values[0], values[1], values[2],
+                headers[3], headers[4], headers[5], values[3], values[4], values[5])
+        }
+        performanceText.text = table + "\n" + getString(
+            R.string.monitor_perf_footer, stream.transport, info?.describe() ?: "", stream.framesLost, stream.keyframeRequests,
+        ) + " · " + device.thermal
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putIntArray(STATE_UPDATES_ASKED, updatesAsked.toIntArray())
+    }
+
+    /** Back while streaming would end it: ask for a second press first. */
+    @Deprecated("Deprecated in Java")
+    override fun onBackPressed() {
+        if (streaming) {
+            val now = SystemClock.uptimeMillis()
+            if (now - lastBackAt > BACK_CONFIRM_MS) {
+                lastBackAt = now
+                Toast.makeText(this, R.string.back_again, Toast.LENGTH_SHORT).show()
+                return
+            }
+        }
+        @Suppress("DEPRECATION")
+        super.onBackPressed()
     }
 
     override fun onDestroy() {
-        if (recorder.isRecording) recorder.stop()
-        probe.release()
+        holdWifi(false)
+        handler.removeCallbacksAndMessages(null)
+        updateDialog?.dismiss()
+        updateDialog = null
+        background { if (recorder.isRecording) recorder.stop() }
+        io.shutdown() // lets the queued work, including that final stop, finish
         super.onDestroy()
     }
 
@@ -520,20 +1076,35 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
 
     override fun onResume() {
         super.onResume()
+        if (updateAfterPermission && UpdateInstaller.canInstall(this)) {
+            updateAfterPermission = false
+            client?.requestUpdate()
+        }
         enterImmersive()
+        githubAfterPermission?.let { release ->
+            if (UpdateInstaller.canInstall(this)) {
+                githubAfterPermission = null
+                installFromGitHub(release)
+            }
+        }
+        checkGitHub(force = false)
         discovery.start()
         clipboardBridge.start()
+        inputs.start()
     }
 
     override fun onPause() {
         super.onPause()
         discovery.stop()
         clipboardBridge.stop()
+        inputs.stop()
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus) enterImmersive()
+        // A dialog took the trackpad back; take it again.
+        applyPointerCapture()
     }
 
     private fun enterImmersive() {
@@ -580,15 +1151,48 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
         if (frame.width() > 0 && frame.height() > 0) client?.resize(frame.width(), frame.height())
     }
 
-    private val restartClient = Runnable {
+    private val restartClient = Runnable { startClient(force = false) }
+
+    /**
+     * (Re)connects with the surface's current size; [force] restarts even if
+     * the size did not change. The old client is stopped without blocking the
+     * UI; the new one starts once the old decoder has let go of the Surface.
+     */
+    private fun startClient(force: Boolean) {
+        val holder = surfaceView.holder
+        val frame = holder.surfaceFrame
+        if (!holder.surface.isValid || frame.width() <= 0 || frame.height() <= 0) return
+        if (!force && client?.hasSize(frame.width(), frame.height()) == true) return
+        val old = client
+        if (old != null) {
+            shortcutBar.releaseAll() // while the old client can still send the key-ups
+            old.stop()
+            retiring = old
+        }
+        client = null
+        pairingReply = null
+        streaming = false
+        val generation = ++clientGeneration
+        val waitFor = retiring
+        if (waitFor == null) {
+            createClient()
+            return
+        }
+        Thread({
+            waitFor.awaitStopped()
+            handler.post {
+                if (retiring === waitFor) retiring = null
+                if (generation == clientGeneration && client == null && !isFinishing) createClient()
+            }
+        }, "screeaner-restart").start()
+    }
+
+    private fun createClient() {
         val holder = surfaceView.holder
         val frame = holder.surfaceFrame
         val width = frame.width()
         val height = frame.height()
-        if (!holder.surface.isValid || width <= 0 || height <= 0) return@Runnable
-        if (client?.hasSize(width, height) == true) return@Runnable
-        client?.stop()
-        pairingReply = null
+        if (!holder.surface.isValid || width <= 0 || height <= 0) return
         val metrics = resources.displayMetrics
         val physicalDpi = metrics.xdpi.roundToInt()
         val dpi = if (physicalDpi in 80..800) physicalDpi else metrics.densityDpi
@@ -610,15 +1214,24 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
             trust = trust,
             discovery = discovery,
             manualHost = { manualHost },
-            listener = this,
+            rawListener = this,
+            override = streamOverride,
+            updateDir = File(cacheDir, "updates"),
         ).also { it.start() }
     }
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
         handler.removeCallbacks(restartClient)
         handler.removeCallbacks(resizeClient)
+        benchmark?.cancel()
+        shortcutBar.releaseAll()
         streaming = false
-        client?.stop()
+        holdWifi(false)
+        clientGeneration++
+        // The decoder must stop drawing on the Surface before this returns.
+        client?.stop(blocking = true)
+        retiring?.awaitStopped()
+        retiring = null
         client = null
     }
 
@@ -633,24 +1246,39 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
                 pairingBox.visibility = View.GONE
                 pairingReply = null
             }
+            // A late callback from a client stopped in surfaceDestroyed must not re-take the lock.
+            holdWifi(streaming && client != null)
+            if (!streaming) {
+                pointer.releaseAll()
+                keyboard.reset()
+                macCursorHidden = false // a new stream starts with the Mac's cursor drawn
+            }
+            applyCursor()
+            applyPointerCapture()
             when (state) {
                 StreamClient.State.STREAMING -> {
                     overlay.visibility = View.GONE
-                    deniedMessage = null
+                    // Otherwise the keyboard covers the stream and swallows what is typed.
+                    hideKeyboard()
+                    handler.removeCallbacks(hideNotice)
+                    noticeText.visibility = View.GONE
                 }
 
                 else -> {
                     overlay.visibility = View.VISIBLE
-                    var text = when (state) {
-                        StreamClient.State.CONNECTING -> getString(R.string.status_connecting, detail)
+                    statusText.text = when (state) {
+                        StreamClient.State.CONNECTING -> getString(R.string.status_connecting)
                         StreamClient.State.PAIRING -> getString(R.string.status_pairing, detail)
                         StreamClient.State.WAITING -> getString(R.string.status_waiting_stream)
                         else -> getString(R.string.status_searching)
                     }
-                    // Keep a refusal visible for a while instead of overwriting it at once.
-                    val denied = deniedMessage
-                    if (denied != null && SystemClock.uptimeMillis() - deniedAt < 15_000) text = "$denied\n$text"
-                    statusText.text = text
+                    statusLabel.text = when (state) {
+                        StreamClient.State.CONNECTING -> getString(R.string.label_connecting, detail)
+                        StreamClient.State.PAIRING -> getString(R.string.label_pairing)
+                        StreamClient.State.WAITING -> getString(R.string.label_waiting)
+                        else -> getString(R.string.label_searching)
+                    }
+                    radar.searching = state == StreamClient.State.SEARCHING
                 }
             }
             applyHudMode()
@@ -668,16 +1296,23 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
             pairingHint.text = getString(if (ask) R.string.pairing_compare else R.string.pairing_waiting, macName)
             pairingConfirm.visibility = if (ask) View.VISIBLE else View.GONE
             pairingCancel.visibility = if (ask) View.VISIBLE else View.GONE
+            // On short screens the code and its buttons may be below the fold.
+            overlayScroll.post { overlayScroll.smoothScrollTo(0, max(0, pairingBox.top - (16 * resources.displayMetrics.density).toInt())) }
         }
     }
 
-    override fun onDenied(reason: String) {
+    override fun onDenied(reason: StreamClient.DenyReason, detail: String) {
         runOnUiThread {
             pairingBox.visibility = View.GONE
             pairingReply = null
-            deniedMessage = getString(R.string.pairing_denied, reason)
-            deniedAt = SystemClock.uptimeMillis()
-            statusText.text = deniedMessage
+            showNotice(
+                when (reason) {
+                    StreamClient.DenyReason.MAC_REFUSED ->
+                        if (detail.isBlank()) getString(R.string.denied_by_mac_generic) else getString(R.string.denied_by_mac, detail)
+                    StreamClient.DenyReason.MAC_TOO_OLD -> getString(R.string.denied_mac_too_old, appVersion.substringBefore(' '))
+                    StreamClient.DenyReason.CANCELLED_HERE -> getString(R.string.denied_cancelled)
+                }
+            )
         }
     }
 
@@ -685,9 +1320,124 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
         runOnUiThread { if (optClipboard) clipboardBridge.apply(text) }
     }
 
-    override fun onProbeInfo(area: RectF) = probe.onProbeInfo(area)
+    override fun onUpdateOffer(offer: StreamClient.UpdateOffer) {
+        runOnUiThread {
+            // Back from allowing installs: the stream reconnected, so the offer is new; just take it.
+            if (updateAfterPermission && UpdateInstaller.canInstall(this)) {
+                updateAfterPermission = false
+                client?.requestUpdate()
+                return@runOnUiThread
+            }
+            if (!updatesAsked.add(offer.versionCode) || benchmark != null || isFinishing) return@runOnUiThread
+            if (streaming) {
+                // No modal dialog over a live stream: a button in the monitor and a short note.
+                pendingOffer = offer
+                updateButton.text = getString(R.string.update_button, offer.versionName)
+                updateButton.visibility = View.VISIBLE
+                Toast.makeText(this, getString(R.string.update_available_toast, offer.versionName), Toast.LENGTH_LONG).show()
+                return@runOnUiThread
+            }
+            showUpdateDialog(offer)
+        }
+    }
+
+    // region Updates from GitHub Releases (also away from the Mac)
+
+    private val gitHub by lazy { GitHubUpdate("Screeaner-Android/${appVersion.substringBefore(' ')}") }
+
+    /** At most every few hours, never during a stream (the Mac also pushes updates when connected). */
+    private fun checkGitHub(force: Boolean) {
+        if (!optAutoUpdate || streaming) return
+        val now = System.currentTimeMillis()
+        if (!force && now - prefs.getLong(PREF_UPDATE_CHECKED, 0L) < GITHUB_CHECK_MS) return
+        prefs.edit().putLong(PREF_UPDATE_CHECKED, now).apply()
+        Thread({
+            val release = gitHub.latest() ?: return@Thread
+            if (!GitHubUpdate.isNewer(release.versionName, appVersion)) return@Thread
+            runOnUiThread { offerGitHub(release) }
+        }, "screeaner-github").start()
+    }
+
+    private fun offerGitHub(release: GitHubUpdate.Release) {
+        if (streaming || isFinishing || benchmark != null || updateDialog?.isShowing == true) return
+        updateDialog = AlertDialog.Builder(this)
+            .setTitle(getString(R.string.update_title, release.versionName))
+            .setMessage(getString(R.string.github_update_message, appVersion, (release.size / 1024).toInt()))
+            .setPositiveButton(R.string.update_accept) { _, _ ->
+                if (UpdateInstaller.canInstall(this)) {
+                    installFromGitHub(release)
+                } else {
+                    githubAfterPermission = release
+                    Toast.makeText(this, R.string.update_permission, Toast.LENGTH_LONG).show()
+                    UpdateInstaller.openPermissionSettings(this)
+                }
+            }
+            .setNegativeButton(R.string.update_later, null)
+            .show()
+    }
+
+    private fun installFromGitHub(release: GitHubUpdate.Release) {
+        showNotice(getString(R.string.github_downloading, release.versionName))
+        Thread({
+            val apk = gitHub.download(release, File(cacheDir, "updates"))
+            if (apk == null) {
+                runOnUiThread { showNotice(getString(R.string.github_failed)) }
+                return@Thread
+            }
+            try {
+                UpdateInstaller.install(this, apk)
+            } catch (e: Exception) {
+                runOnUiThread { showNotice(getString(R.string.update_failed, e.message ?: "?")) }
+            }
+        }, "screeaner-github").start()
+    }
+
+    // endregion
+
+    private fun showUpdateDialog(offer: StreamClient.UpdateOffer) {
+        run {
+            updateDialog?.dismiss()
+            updateDialog = AlertDialog.Builder(this)
+                .setTitle(getString(R.string.update_title, offer.versionName))
+                .setMessage(getString(R.string.update_message, appVersion, offer.size / 1024))
+                .setPositiveButton(R.string.update_accept) { _, _ ->
+                    pendingOffer = null
+                    updateButton.visibility = View.GONE
+                    if (UpdateInstaller.canInstall(this)) {
+                        client?.requestUpdate()
+                    } else {
+                        updateAfterPermission = true
+                        Toast.makeText(this, R.string.update_permission, Toast.LENGTH_LONG).show()
+                        UpdateInstaller.openPermissionSettings(this)
+                    }
+                }
+                .setNegativeButton(R.string.update_later, null)
+                .show()
+        }
+    }
+
+    override fun onUpdateDownloaded(apk: File, offer: StreamClient.UpdateOffer) {
+        // Copying several MB into the installer session must not block the UI.
+        background {
+            try {
+                UpdateInstaller.install(this, apk)
+            } catch (e: Exception) {
+                runOnUiThread {
+                    Toast.makeText(this, getString(R.string.update_failed, e.message ?: "?"), Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        if (intent.action == UpdateInstaller.ACTION_RESULT) {
+            UpdateInstaller.handleResult(this, intent)?.let { Toast.makeText(this, it, Toast.LENGTH_LONG).show() }
+        }
+    }
 
     override fun onSample(sample: StreamSample) {
+        benchmark?.onSample(sample)
         runOnUiThread { showSample(sample) }
     }
 
@@ -732,10 +1482,46 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
     private var penHovering = false
     private var lastPenAt = 0L
     private var ignoringPalm = false
+    /** The pen pointer followed while a palm is being ignored, or -1. */
+    private var penPointerId = -1
+
+    private fun penUnderPalm(event: MotionEvent) {
+        val action = event.actionMasked
+        val index = event.actionIndex
+        when (action) {
+            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
+                val tool = event.getToolType(index)
+                if (penPointerId == -1 && (tool == MotionEvent.TOOL_TYPE_STYLUS || tool == MotionEvent.TOOL_TYPE_ERASER)) {
+                    penPointerId = event.getPointerId(index)
+                    updatePenAt(event, index)
+                    button = Protocol.BUTTON_LEFT
+                    send(Protocol.ACTION_DOWN, event.getX(index), event.getY(index), event.getPressure(index))
+                }
+            }
+            MotionEvent.ACTION_MOVE -> {
+                val i = event.findPointerIndex(penPointerId)
+                if (penPointerId != -1 && i >= 0) {
+                    updatePenAt(event, i)
+                    send(Protocol.ACTION_MOVE, event.getX(i), event.getY(i), event.getPressure(i))
+                }
+            }
+            MotionEvent.ACTION_POINTER_UP, MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                if (penPointerId == -1) return
+                if (action == MotionEvent.ACTION_CANCEL || event.getPointerId(index) == penPointerId) {
+                    val i = event.findPointerIndex(penPointerId).coerceAtLeast(0)
+                    send(Protocol.ACTION_UP, event.getX(i), event.getY(i), 0f)
+                    penPointerId = -1
+                }
+            }
+        }
+    }
 
     /** Reads the tool and tilt of [event]'s first pointer. */
-    private fun updatePen(event: MotionEvent) {
-        currentTool = when (event.getToolType(0)) {
+    private fun updatePen(event: MotionEvent) = updatePenAt(event, 0)
+
+    /** Reads the tool and tilt of pointer [index]. */
+    private fun updatePenAt(event: MotionEvent, index: Int) {
+        currentTool = when (event.getToolType(index)) {
             MotionEvent.TOOL_TYPE_STYLUS -> Protocol.TOOL_PEN
             MotionEvent.TOOL_TYPE_ERASER -> Protocol.TOOL_ERASER
             else -> Protocol.TOOL_FINGER
@@ -747,8 +1533,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
         }
         lastPenAt = SystemClock.uptimeMillis()
         // Android: tilt = angle from perpendicular, orientation = direction it leans.
-        val tilt = event.getAxisValue(MotionEvent.AXIS_TILT)
-        val orientation = event.getAxisValue(MotionEvent.AXIS_ORIENTATION)
+        val tilt = event.getAxisValue(MotionEvent.AXIS_TILT, index)
+        val orientation = event.getAxisValue(MotionEvent.AXIS_ORIENTATION, index)
         tiltX = (sin(tilt) * sin(orientation)).coerceIn(-1f, 1f)
         tiltY = (-sin(tilt) * cos(orientation)).coerceIn(-1f, 1f)
     }
@@ -785,10 +1571,17 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
     }
 
     private fun onSurfaceTouch(event: MotionEvent): Boolean {
+        // Mice and trackpads click at once and have their own gestures.
+        if (pointer.onTouch(event, surfaceWidth(), surfaceHeight())) return true
         if (event.actionMasked == MotionEvent.ACTION_DOWN && isPalm(event)) ignoringPalm = true
         if (ignoringPalm) {
+            // The resting hand is ignored, but a pen that lands next to it still draws.
+            penUnderPalm(event)
             val end = event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL
-            if (end) ignoringPalm = false
+            if (end) {
+                ignoringPalm = false
+                penPointerId = -1
+            }
             return true
         }
         updatePen(event)
@@ -807,6 +1600,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
                 val secondary = event.buttonState and
                     (MotionEvent.BUTTON_SECONDARY or MotionEvent.BUTTON_STYLUS_PRIMARY) != 0
                 button = if (secondary) Protocol.BUTTON_RIGHT else Protocol.BUTTON_LEFT
+                if (Build.VERSION.SDK_INT < 30) surfaceView.requestUnbufferedDispatch(event)
                 if (tool != MotionEvent.TOOL_TYPE_FINGER) {
                     pendingDown = false
                     downSent = true
@@ -814,6 +1608,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
                 } else {
                     pendingDown = true
                     downSent = false
+                    // The click waits a moment in case a second finger lands,
+                    // but the cursor can jump under the finger right away.
+                    send(Protocol.ACTION_HOVER, downX, downY, 0f)
                     handler.postDelayed(flushDown, FINGER_DOWN_DELAY_MS)
                 }
             }
@@ -897,8 +1694,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
                     send(Protocol.ACTION_UP, startCx, startCy, 0f, Protocol.BUTTON_RIGHT)
                 } else if (isTap && maxPointers == 3) {
                     // off -> compact line -> full monitor -> off
-                    hudMode = (hudMode + 1) % 3
-                    applyHudMode()
+                    setHudMode((hudMode + 1) % 3)
                 }
                 pendingDown = false
                 downSent = false
@@ -917,6 +1713,21 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
         const val PREF_PALM = "optPalm"
         const val PREF_SIDEBAR = "optSidebar"
         const val PREF_CTRL_CMD = "optCtrlIsCmd"
+        const val PREF_AUTO_UPDATE = "autoUpdate"
+        const val PREF_LAST_VERSION = "lastRunVersion"
+        const val PREF_UPDATE_CHECKED = "githubCheckedAt"
+        const val GITHUB_CHECK_MS = 6 * 3600 * 1000L
+        const val PREF_CMD_KEY = "cmdKey"
+        const val PREF_TABLET_LAYOUT = "tabletLayout"
+        const val PREF_CURSOR_LOCAL = "cursorLocal"
+        const val PREF_TRACKPAD_MAC = "trackpadWholeMac"
+        const val PREF_POINTER_SPEED = "pointerSpeed"
+        const val PREF_REVERSE_SCROLL = "reverseScroll"
+        const val CMD_AUTO = "auto"
+        const val CMD_CTRL = "ctrl"
+        const val CMD_META = "meta"
+        val CMD_VALUES = listOf(CMD_AUTO, CMD_CTRL, CMD_META)
+        val POINTER_SPEEDS = floatArrayOf(0.7f, 1f, 1.4f)
         const val PREF_SHORTCUTS = "shortcuts"
         const val PALM_WINDOW_MS = 600L
         const val PREF_MODE = "displayMode"
@@ -927,7 +1738,10 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
         const val HUD_OFF = 0
         const val HUD_COMPACT = 1
         const val HUD_FULL = 2
-        const val MAX_SHARED_CHARS = 200_000
+        const val PREF_HUD = "hudMode"
+        const val STATE_UPDATES_ASKED = "updatesAsked"
+        const val NOTICE_MS = 15_000L
+        const val BACK_CONFIRM_MS = 2_000L
         const val PREF_DEVICE_ID = "deviceId"
         const val ROTATION_SETTLE_MS = 350L
         /** Fraction of the screen scrolled per mouse wheel notch. */

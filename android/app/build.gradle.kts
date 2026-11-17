@@ -11,20 +11,18 @@ android {
         applicationId = "app.screeaner"
         minSdk = 26
         targetSdk = 35
-        versionCode = 4
-        versionName = "0.4.0"
+        versionCode = 12
+        versionName = "0.9.1"
     }
 
-    // Release signing comes from the environment (see docs/DISTRIBUTION.md):
-    // SCREEANER_KEYSTORE (path), SCREEANER_KEYSTORE_PASSWORD, SCREEANER_KEY_ALIAS,
-    // SCREEANER_KEY_PASSWORD. Without them the release build is signed with the
-    // debug key, so the APK is always installable.
-    val releaseKeystore = System.getenv("SCREEANER_KEYSTORE")?.takeIf { it.isNotBlank() }
-
+    // Updates only install over an app signed with the same key, so releases
+    // must always use the same keystore. CI passes it through these variables
+    // (see .github/workflows/release.yml); locally, export them before building.
+    val keystore = System.getenv("SCREEANER_KEYSTORE")?.let { file(it) }?.takeIf { it.exists() }
     signingConfigs {
-        create("release") {
-            if (releaseKeystore != null) {
-                storeFile = file(releaseKeystore)
+        if (keystore != null) {
+            create("release") {
+                storeFile = keystore
                 storePassword = System.getenv("SCREEANER_KEYSTORE_PASSWORD")
                 keyAlias = System.getenv("SCREEANER_KEY_ALIAS")
                 keyPassword = System.getenv("SCREEANER_KEY_PASSWORD")
@@ -35,11 +33,8 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = false
-            signingConfig = if (releaseKeystore != null) {
-                signingConfigs.getByName("release")
-            } else {
-                signingConfigs.getByName("debug")
-            }
+            // Without the release key, fall back to the debug key so the build still works.
+            signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
         }
     }
 

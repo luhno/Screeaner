@@ -1,0 +1,7 @@
+0.7.1
+• Tela de conexão rola e se adapta a tablets pequenos, retrato e tela dividida
+• Teclado não cobre mais o campo de IP; Conectar tenta na hora
+• A caneta funciona com a mão apoiada na tela
+• Trocar modo ou opções não trava mais a tela
+• Gravação e atualização sem travar o app
+• Voltar pede confirmação durante a transmissão
