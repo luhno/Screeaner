@@ -211,6 +211,14 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
         }
         hostInput.setText(manualHost ?: "")
         hudMode = prefs.getInt(PREF_HUD, HUD_OFF)
+        // First launch of a new version (after an update from the Mac or GitHub): say so.
+        val runningVersion = appVersion.substringBefore(' ')
+        prefs.getString(PREF_LAST_VERSION, null)?.let { previous ->
+            if (GitHubUpdate.isNewer(runningVersion, previous)) {
+                Toast.makeText(this, getString(R.string.updated_to, runningVersion, previous), Toast.LENGTH_LONG).show()
+            }
+        }
+        prefs.edit().putString(PREF_LAST_VERSION, runningVersion).apply()
         savedInstanceState?.getIntArray(STATE_UPDATES_ASKED)?.let { asked -> updatesAsked += asked.toList() }
         setUpDisplayOptions(prefs)
         loadOptions()
@@ -1706,6 +1714,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
         const val PREF_SIDEBAR = "optSidebar"
         const val PREF_CTRL_CMD = "optCtrlIsCmd"
         const val PREF_AUTO_UPDATE = "autoUpdate"
+        const val PREF_LAST_VERSION = "lastRunVersion"
         const val PREF_UPDATE_CHECKED = "githubCheckedAt"
         const val GITHUB_CHECK_MS = 6 * 3600 * 1000L
         const val PREF_CMD_KEY = "cmdKey"

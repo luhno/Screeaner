@@ -218,7 +218,7 @@ No painel completo, **● Gravar sessão de teste** grava uma linha por segundo 
 
 ### Versão do app
 
-A versão aparece no rodapé da tela de conexão e no título do painel do tablet (`Screeaner v0.9.0 (11) · Android … · modelo`), e no rodapé do menu do Mac. Cada lado também mostra a versão do outro: o menu do Mac lista a versão do app de cada tablet, e as sessões gravadas registram a versão do Mac.
+A versão aparece no rodapé da tela de conexão e no título do painel do tablet (`Screeaner v0.9.1 (12) · Android … · modelo`), e no rodapé do menu do Mac. Cada lado também mostra a versão do outro: o menu do Mac lista a versão do app de cada tablet, e as sessões gravadas registram a versão do Mac.
 
 ## Atualizações (sem Google Play nem App Store)
 
@@ -314,8 +314,8 @@ Mudar um ajuste reinicia a transmissão automaticamente.
 | 18 `CLIPBOARD` | tablet ⇄ Mac | texto UTF‑8 |
 | 19 `AUDIO` | Mac → tablet | PCM s16le estéreo 48 kHz |
 | 27 `MOUSE` | tablet → Mac | `kind u8` (0 mover relativo, 1 botão desce, 2 botão sobe, 3 roda em linhas, 4 rolagem em pontos, 5 zoom, 6 cursor do Mac no vídeo) · `button u8` (botão 0/1/2, fase do zoom, ou 1/0 mostrar/esconder) · `a f32` · `b f32` · `x f32` · `y f32` (NaN = onde está o cursor). Mac 0.8+ |
-| 29 `ENDPOINTS` | Mac → tablet | JSON `{hosts: [{host, port, udp}]}`: endereços IPv6 globais e IPv4 público do Mac para a internet (lista vazia = esquecer) |
 | 28 `TEXT` | tablet → Mac | `action u8` · `androidKeyCode u16` · `scanCode u16` · `flags u8` · texto UTF‑8 já com o layout do tablet. Mac 0.8+ |
+| 29 `ENDPOINTS` | Mac → tablet | JSON `{hosts: [{host, port, udp}]}`: endereços IPv6 globais e IPv4 público do Mac para a internet (lista vazia = esquecer) |
 
 Coordenadas são normalizadas (0–1) em relação à tela do tablet.
 

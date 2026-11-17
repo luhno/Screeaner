@@ -14,7 +14,7 @@ enum Proto {
     /// First four bytes ("SCRN") of the datagram the tablet sends to open the UDP path.
     static let udpMagic: UInt32 = 0x5343_524E
     /// Shown in the menu and sent to the tablet (which logs it in test sessions).
-    static let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.9.0"
+    static let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.9.1"
 
     /// The host clock in microseconds: frame timestamps, pongs and probe acks all use it.
     static func hostClockMicros() -> UInt64 {

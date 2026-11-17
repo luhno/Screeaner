@@ -85,6 +85,13 @@ final class AppModel: ObservableObject {
         Brightness.restoreLeftovers()
         pairedTablets = PairingStore.shared.tablets
         refreshLaunchAtLogin()
+        // First launch of a new version (e.g. right after an automatic update): say so.
+        let defaults = UserDefaults.standard
+        if let previous = defaults.string(forKey: "lastRunVersion"),
+           AppVersion.isNewer(Proto.appVersion, than: previous) {
+            show("Screeaner atualizado para v\(Proto.appVersion) (antes v\(previous))", sticky: true)
+        }
+        defaults.set(Proto.appVersion, forKey: "lastRunVersion")
         ipAddresses = Self.localIPAddresses()
 
         OnlineAccess.shared.onChange = { [weak self] status in
@@ -146,10 +153,11 @@ final class AppModel: ObservableObject {
     // MARK: - Notices
 
     /// Shows a message at the top of the menu. Info disappears after a while; errors stay until closed.
-    func show(_ text: String, error: Bool = false) {
+    /// `sticky`: an info that stays until closed (the menu may not be open right now).
+    func show(_ text: String, error: Bool = false, sticky: Bool = false) {
         noticeExpiry?.cancel()
         notice = Notice(text: text, isError: error)
-        guard !error else { return }
+        guard !error, !sticky else { return }
         let work = DispatchWorkItem { [weak self] in
             if self?.notice?.text == text { self?.notice = nil }
         }
