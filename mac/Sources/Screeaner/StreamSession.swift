@@ -20,12 +20,14 @@ enum SettingsKey {
     static let mirrorScreen = "mirrorScreen"
     /// Once a tablet is marked as favorite, the other paired tablets need approval to connect.
     static let favoritesOnly = "favoritesOnly"
+    /// Paired tablets may connect from the internet, straight to this Mac (see OnlineAccess).
+    static let onlineAccess = "onlineAccess"
 
     static func registerDefaults() {
         UserDefaults.standard.register(defaults: [
             hiDPI: true, fps: 60, bitrateMbps: 20, codec: Codec.h264.rawValue, autoAdb: true,
             adaptiveBitrate: true, udpOverWifi: true, clipboard: true, autoOpenApp: true, mirrorScreen: "",
-            favoritesOnly: true,
+            favoritesOnly: true, onlineAccess: false,
         ])
     }
 }
@@ -240,6 +242,13 @@ final class StreamSession {
             // Favorite mode: with a favorite marked, only favorites connect without asking.
             let favoritesOnly = UserDefaults.standard.bool(forKey: SettingsKey.favoritesOnly) && store.hasFavorites
             let known = trust == .favorite || (trust == .paired && !favoritesOnly)
+            // From the internet only tablets paired at home get in: strangers never reach the pairing panel.
+            if connection.isInternet && trust == .unknown {
+                connection.send(.secDenied, Data(
+                    "Pareie este tablet em casa (mesma rede ou USB) antes de usar o Screeaner pela internet.".utf8
+                ))
+                return abortHandshake()
+            }
             if !known && store.isSnoozed(deviceId: hello.deviceId) {
                 let reason = trust == .paired
                     ? "Este Mac só conecta sozinho os tablets favoritos. Marque ★ neste tablet no menu do Screeaner no Mac."
@@ -357,7 +366,8 @@ final class StreamSession {
                 self.onPairingFinished?(request)
             }
             if needsApproval { self.onPaired?() }
-            self.report("Tablet conectado com segurança")
+            if self.connection.isInternet { OnlineAccess.shared.noteRemote(name: hello.name) }
+            self.report(self.connection.isInternet ? "Tablet conectado pela internet, com segurança" : "Tablet conectado com segurança")
         }
     }
 
@@ -484,6 +494,15 @@ final class StreamSession {
         }
     }
 
+    /// Main queue. Tells a paired tablet where to find this Mac from the internet
+    /// (an empty list makes it forget). Encrypted, like everything after pairing.
+    func sendEndpoints() {
+        guard isEstablished, let id = deviceID, PairingStore.shared.isFavorite(deviceId: id) != nil else { return }
+        struct Card: Encodable { let hosts: [OnlineAccess.Endpoint] }
+        guard let json = try? JSONEncoder().encode(Card(hosts: OnlineAccess.shared.endpoints())) else { return }
+        connection.send(.endpoints, json)
+    }
+
     /// Main queue. The tablet draws its own cursor for its mouse or trackpad (no stream
     /// latency); the Mac's cursor then stays out of the video so there are not two.
     private func setCursorShown(_ shown: Bool) {
@@ -606,7 +625,9 @@ final class StreamSession {
     private func configMessage() -> Data? {
         let config = StreamConfig(
             codec: codec.rawValue, width: streamWidth, height: streamHeight, fps: fps,
-            token: useUdp ? token : 0, udpPort: Int(Proto.port), mode: mode.rawValue,
+            token: useUdp ? token : 0,
+            udpPort: Int(connection.isInternet ? OnlineAccess.shared.externalUdpPort(forIPv6: connection.isIPv6) : Proto.port),
+            mode: mode.rawValue,
             server: Host.current().localizedName ?? "Mac", version: Proto.appVersion, audio: wantsAudio,
             lowLatency: lowLatencyEncoder ?? false, frameCap: frameCap,
             favorite: deviceID.flatMap { PairingStore.shared.isFavorite(deviceId: $0) } ?? false
@@ -640,12 +661,14 @@ final class StreamSession {
         useUdp = (hello.udp ?? false) && defaults.bool(forKey: SettingsKey.udpOverWifi) && !connection.isLoopback
         wantsAudio = hello.audio ?? false
         adaptive = defaults.bool(forKey: SettingsKey.adaptiveBitrate)
-        controller = BitrateController(maximum: bitrate)
+        // Over the internet, start modestly and let the adaptive bitrate climb.
+        controller = BitrateController(maximum: bitrate, start: connection.isInternet ? min(bitrate, 8_000_000) : nil)
         clientName = hello.name
         clientVersion = hello.version
         tabletWantsClipboard = hello.clipboard ?? false
         setClipboardAllowed(defaults.bool(forKey: SettingsKey.clipboard))
         onHello?() // lets the app retire a stale session of the same tablet first
+        sendEndpoints()
 
         mode = DisplayMode(rawValue: hello.mode ?? "") ?? .extend
         position = DisplayPosition(rawValue: hello.position ?? "") ?? .auto

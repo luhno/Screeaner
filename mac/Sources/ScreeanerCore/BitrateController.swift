@@ -27,10 +27,11 @@ public struct BitrateController {
     private var cleanSeconds = 0
     private var bestRttMs = Double.infinity
 
-    public init(maximum: Int, minimum: Int = 2_000_000) {
+    /// `start`: where to begin (e.g. lower over the internet); the ceiling stays `maximum`.
+    public init(maximum: Int, minimum: Int = 2_000_000, start: Int? = nil) {
         self.maximum = max(maximum, minimum)
         self.minimum = minimum
-        self.current = max(maximum, minimum)
+        self.current = min(max(start ?? maximum, minimum), max(maximum, minimum))
     }
 
     /// Returns the new bitrate when it changed, nil otherwise.

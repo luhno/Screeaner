@@ -86,6 +86,7 @@ struct MenuView: View {
                 ForEach(model.tablets) { tablet in card(tablet) }
             }
             settings
+            onlineSection
             paired
             if !model.hasScreenPermission || !model.hasInputPermission {
                 permissions
@@ -259,6 +260,63 @@ struct MenuView: View {
         .onChange(of: clipboard) { model.clipboardSettingChanged($0) }
         .onChange(of: mirrorScreen) { _ in model.restartSessions(onlyMirror: true) }
         .onChange(of: autoAdb) { model.autoAdbChanged($0) }
+    }
+
+    /// Internet access with no server in between: the switch and what the router said.
+    private var onlineSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            toggleRow("Acesso pela internet (sem servidor)", isOn: Binding(
+                get: { model.online.enabled },
+                set: { model.setOnlineAccess($0) }
+            ))
+            if model.online.enabled {
+                let online = model.online
+                if online.checking && online.ipv6.isEmpty && online.publicIPv4 == nil {
+                    onlineLine("Verificando o roteador…", ok: nil)
+                } else {
+                    if let address = online.ipv6.first {
+                        onlineLine("IPv6 · \(address)", ok: true)
+                        if online.ipv6Opened != true {
+                            Text("Se o tablet não conectar de fora, libere no roteador a entrada IPv6 das portas TCP e UDP \(Proto.port) para este Mac (firewall IPv6).")
+                                .font(Dot.text(11.5)).foregroundStyle(Dot.inkSecondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    } else {
+                        onlineLine("IPv6 · sem endereço global (ative o IPv6 no roteador)", ok: false)
+                    }
+                    if online.cgnat {
+                        onlineLine("IPv4 · compartilhado pela operadora (CGNAT): só o IPv6 funciona", ok: false)
+                    } else if online.doubleNat {
+                        onlineLine("IPv4 · atrás de dois roteadores: ponha o da operadora em modo bridge, ou use o IPv6", ok: false)
+                    } else if let ip = online.publicIPv4, let port = online.tcpPort {
+                        onlineLine("IPv4 · \(ip):\(port) · porta aberta (\(online.method ?? "roteador"))", ok: true)
+                    } else if let ip = online.publicIPv4 {
+                        onlineLine("IPv4 · \(ip) · o roteador não abriu a porta: ative o UPnP ou encaminhe TCP e UDP \(Proto.port)", ok: false)
+                    } else {
+                        onlineLine("IPv4 · o roteador não respondeu (UPnP e NAT-PMP desligados?)", ok: false)
+                    }
+                }
+                if let date = online.lastRemote {
+                    onlineLine("Última conexão de fora: \(online.lastRemoteName ?? "tablet"), \(date.formatted(date: .omitted, time: .shortened))", ok: true)
+                }
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text("Só tablets já pareados entram pela internet, criptografados de ponta a ponta. Conecte uma vez em casa: o tablet aprende o endereço sozinho.")
+                        .font(Dot.text(11.5)).foregroundStyle(Dot.inkSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 4)
+                    Button("Verificar") { model.refreshOnlineAccess() }.buttonStyle(DotButtonStyle())
+                }
+            }
+        }
+    }
+
+    private func onlineLine(_ text: String, ok: Bool?) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            DotMarker(color: ok == false ? Dot.signal : (ok == true ? Dot.ink : Dot.inkSecondary))
+            Text(text).font(Dot.mono(10.5))
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+        }
     }
 
     /// ★ / ☆: favorites connect by themselves, without a code.

@@ -4,8 +4,8 @@
     <string name="status_searching">Procurando\no Mac</string>
     <string name="status_connecting">Conectando</string>
     <string name="status_waiting_stream">Aguardando\nvídeo</string>
-    <string name="help">Abra o Screeaner no Mac. O tablet tenta o cabo primeiro e depois a rede, sozinho. Na primeira conexão, as duas telas mostram o mesmo código para você confirmar.</string>
-    <string name="host_hint">IP do Mac · opcional</string>
+    <string name="help">Abra o Screeaner no Mac. O tablet tenta o cabo primeiro e depois a rede, sozinho. Na primeira conexão, as duas telas mostram o mesmo código para você confirmar. Fora de casa, com o acesso pela internet ligado no Mac, ele conecta direto pela internet.</string>
+    <string name="host_hint">IP ou nome do Mac · opcional</string>
     <string name="connect">Conectar</string>
     <string name="monitor_latency">Mac → tela</string>
     <string name="monitor_performance">Desempenho</string>

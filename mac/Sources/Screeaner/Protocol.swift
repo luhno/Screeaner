@@ -14,7 +14,7 @@ enum Proto {
     /// First four bytes ("SCRN") of the datagram the tablet sends to open the UDP path.
     static let udpMagic: UInt32 = 0x5343_524E
     /// Shown in the menu and sent to the tablet (which logs it in test sessions).
-    static let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.8.0"
+    static let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.9.0"
 
     /// The host clock in microseconds: frame timestamps, pongs and probe acks all use it.
     static func hostClockMicros() -> UInt64 {
@@ -44,6 +44,7 @@ enum MsgType: UInt8 {
     case audio = 19           // mac -> tablet, PCM s16le stereo 48 kHz
     case mouse = 27           // tablet -> mac, [kind u8][button u8][a f32][b f32][x f32][y f32] (see MouseKind)
     case text = 28            // tablet -> mac, [action u8][androidKeyCode u16][scanCode u16][flags u8][UTF-8 text]
+    case endpoints = 29       // mac -> tablet, JSON {hosts: [{host, port, udp}]}: where to find this Mac from the internet
 
     case secHello = 20        // tablet -> mac, pairing handshake (see SecureChannel)
     case secServer = 21       // mac -> tablet

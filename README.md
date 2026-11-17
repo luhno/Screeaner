@@ -44,6 +44,31 @@ Na primeira conexão de cada tablet, **o Mac e o tablet mostram o mesmo código 
 - O código protege contra intermediários: ele é derivado das chaves dos dois lados, com um compromisso que impede um atacante de escolher chaves que gerem o mesmo número.
 - No menu do Mac, **Tablets autorizados** lista os tablets pareados e permite remover cada um. No tablet, *Opções › Esquecer Macs* faz o inverso.
 
+### Pela internet, sem servidor
+
+Ligue **Acesso pela internet (sem servidor)** no menu do Mac. O tablet passa a conectar direto no Mac de qualquer lugar, sem nenhum serviço no meio: nada de conta, nuvem ou relay. A conexão continua criptografada de ponta a ponta com as chaves do pareamento.
+
+**Como o Mac fica alcançável**
+- **IPv6:** os endereços IPv6 globais do Mac dispensam NAT. O Mac pede ao roteador, por UPnP IGDv2, para liberar a entrada no firewall IPv6.
+- **IPv4:** o Mac pede ao roteador para abrir a porta (NAT-PMP, depois UPnP) e descobre o IP público com ele. Se a operadora usa CGNAT, ou se há dois roteadores em sequência, o menu avisa e indica o que fazer.
+- **Status:** o menu mostra o que funcionou e qual foi a última conexão vinda de fora.
+
+**Como o tablet acha o Mac**
+- Enquanto está em casa, o tablet recebe do Mac, criptografados, os endereços pela internet. Ao abrir o app longe de casa, se não acha o Mac por perto, tenta todos esses endereços ao mesmo tempo e fica com o primeiro que responder.
+- O campo de IP também aceita IPv6 (`2804::1` ou `[2804::1]:27183`) e nomes, por exemplo o DNS dinâmico do roteador.
+
+**Segurança**
+- Pela internet, só entram tablets já pareados. Um aparelho desconhecido nem chega ao pedido de pareamento.
+- Com o acesso desligado, conexões vindas de fora são fechadas na hora. Tentativas em excesso também são recusadas.
+- A porta só fica aberta no roteador enquanto o acesso está ligado, e é fechada ao desligar ou ao sair do app.
+
+**Qualidade**
+- Pela internet, o bitrate começa em 8 Mbps e o adaptativo sobe conforme a rede deixa.
+- O vídeo vai por UDP com correção de erros, como no Wi‑Fi.
+- Pelo IPv4, a porta UDP externa que o roteador escolheu vai no `CONFIG`.
+
+**Limite:** sem IPv6 e com o IPv4 em CGNAT, ninguém de fora consegue iniciar uma conexão com o Mac. Nesse caso, só com algum intermediário.
+
 ### Modo favorito ★
 
 Marque **★** no tablet que deve conectar sozinho: no cartão do tablet conectado, na lista **Tablets autorizados** ou já no pedido de pareamento (*★ Favorito: conecta sozinho, sem código*).
@@ -178,7 +203,7 @@ No painel completo, **● Gravar sessão de teste** grava uma linha por segundo 
 
 ### Versão do app
 
-A versão aparece no rodapé da tela de conexão e no título do painel do tablet (`Screeaner v0.8.0 (10) · Android … · modelo`), e no rodapé do menu do Mac. Cada lado também mostra a versão do outro: o menu do Mac lista a versão do app de cada tablet, e as sessões gravadas registram a versão do Mac.
+A versão aparece no rodapé da tela de conexão e no título do painel do tablet (`Screeaner v0.9.0 (11) · Android … · modelo`), e no rodapé do menu do Mac. Cada lado também mostra a versão do outro: o menu do Mac lista a versão do app de cada tablet, e as sessões gravadas registram a versão do Mac.
 
 ## Atualizações (sem Google Play nem App Store)
 
@@ -274,6 +299,7 @@ Mudar um ajuste reinicia a transmissão automaticamente.
 | 18 `CLIPBOARD` | tablet ⇄ Mac | texto UTF‑8 |
 | 19 `AUDIO` | Mac → tablet | PCM s16le estéreo 48 kHz |
 | 27 `MOUSE` | tablet → Mac | `kind u8` (0 mover relativo, 1 botão desce, 2 botão sobe, 3 roda em linhas, 4 rolagem em pontos, 5 zoom, 6 cursor do Mac no vídeo) · `button u8` (botão 0/1/2, fase do zoom, ou 1/0 mostrar/esconder) · `a f32` · `b f32` · `x f32` · `y f32` (NaN = onde está o cursor). Mac 0.8+ |
+| 29 `ENDPOINTS` | Mac → tablet | JSON `{hosts: [{host, port, udp}]}`: endereços IPv6 globais e IPv4 público do Mac para a internet (lista vazia = esquecer) |
 | 28 `TEXT` | tablet → Mac | `action u8` · `androidKeyCode u16` · `scanCode u16` · `flags u8` · texto UTF‑8 já com o layout do tablet. Mac 0.8+ |
 
 Coordenadas são normalizadas (0–1) em relação à tela do tablet.

@@ -49,8 +49,31 @@ class TrustStore(context: Context) {
     fun forgetMacs() {
         val editor = prefs.edit()
         prefs.all.keys.filter { it.startsWith(MAC_PREFIX) }.forEach { editor.remove(it) }
+        prefs.all.keys.filter { it.startsWith(ONLINE_PREFIX) }.forEach { editor.remove(it) }
         editor.remove(KEY_FAVORITE_HOST)
         editor.apply()
+    }
+
+    /**
+     * Where each trusted Mac said it can be reached from the internet (sent
+     * encrypted while at home). Tried when the Mac is not found nearby.
+     */
+    fun onlineEndpoints(): List<Discovery.Endpoint> =
+        prefs.all.filterKeys { it.startsWith(ONLINE_PREFIX) }.values.flatMap { value ->
+            (value as? String)?.split('\n')?.mapNotNull { line ->
+                val host = line.substringBeforeLast(' ', "")
+                val port = line.substringAfterLast(' ', "").toIntOrNull()
+                if (host.isEmpty() || port == null) null else Discovery.Endpoint(host, port)
+            } ?: emptyList()
+        }.distinct()
+
+    fun setOnlineEndpoints(macKey: ByteArray, endpoints: List<Discovery.Endpoint>) {
+        val key = ONLINE_PREFIX + encode(macKey)
+        if (endpoints.isEmpty()) {
+            prefs.edit().remove(key).apply()
+        } else {
+            prefs.edit().putString(key, endpoints.joinToString("\n") { "${it.host} ${it.port}" }).apply()
+        }
     }
 
     /**
@@ -81,5 +104,6 @@ class TrustStore(context: Context) {
         const val KEY_PUBLIC = "identityPublic"
         const val MAC_PREFIX = "mac:"
         const val KEY_FAVORITE_HOST = "favoriteHost"
+        const val ONLINE_PREFIX = "online:"
     }
 }

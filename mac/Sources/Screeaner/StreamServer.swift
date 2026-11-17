@@ -27,6 +27,10 @@ final class ClientConnection {
     let peer: String
     /// True when the tablet reached us through `adb reverse` (USB).
     let isLoopback: Bool
+    /// True when the tablet comes from the internet, not from this Mac's own networks.
+    let isInternet: Bool
+    /// The tablet's address is IPv6 (matters for which router port it reached).
+    let isIPv6: Bool
     /// Called on the connection queue.
     var onMessage: ((MsgType, Data) -> Void)?
     var onClose: (() -> Void)?
@@ -37,8 +41,12 @@ final class ClientConnection {
         if case .hostPort(let host, _) = conn.endpoint {
             let text = "\(host)"
             isLoopback = text.hasPrefix("127.") || text.hasPrefix("::ffff:127.") || text == "::1" || text == "localhost"
+            isInternet = !Interfaces.isLocal(host)
+            if case .ipv6(let address) = host { isIPv6 = address.asIPv4 == nil } else { isIPv6 = false }
         } else {
             isLoopback = false
+            isInternet = false
+            isIPv6 = false
         }
     }
 

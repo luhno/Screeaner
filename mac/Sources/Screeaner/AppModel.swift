@@ -50,6 +50,10 @@ final class AppModel: ObservableObject {
     @Published private(set) var launchAtLoginNeedsApproval = false
     /// Cached: the network interfaces are read every few seconds, not on every redraw.
     @Published private(set) var ipAddresses: [String] = []
+    /// Internet access (no server in between): what the router said.
+    @Published private(set) var online = OnlineAccess.Status()
+    /// Recent connection attempts from the internet, to shrug off floods.
+    private var internetAttempts: [Date] = []
 
     private let server = StreamServer()
     private let udpHub = UdpHub()
@@ -80,6 +84,15 @@ final class AppModel: ObservableObject {
         pairedTablets = PairingStore.shared.tablets
         refreshLaunchAtLogin()
         ipAddresses = Self.localIPAddresses()
+
+        OnlineAccess.shared.onChange = { [weak self] status in
+            guard let self else { return }
+            let addressesChanged = status.ipv6 != self.online.ipv6 || status.publicIPv4 != self.online.publicIPv4
+                || status.tcpPort != self.online.tcpPort || status.enabled != self.online.enabled
+            self.online = status
+            if addressesChanged { self.sessions.forEach { $0.sendEndpoints() } }
+        }
+        OnlineAccess.shared.setEnabled(UserDefaults.standard.bool(forKey: SettingsKey.onlineAccess))
 
         server.onError = { [weak self] message in
             DispatchQueue.main.async { self?.show(message, error: true) }
@@ -115,6 +128,7 @@ final class AppModel: ObservableObject {
         timer?.invalidate()
         for session in sessions { session.stop() }
         Brightness.restoreLeftovers()
+        OnlineAccess.shared.shutdown()
     }
 
     // MARK: - Notices
@@ -139,6 +153,15 @@ final class AppModel: ObservableObject {
     // MARK: - Sessions
 
     private func accept(_ connection: ClientConnection) {
+        if connection.isInternet {
+            // Closed unless the user turned internet access on; and never a flood.
+            let now = Date()
+            internetAttempts = internetAttempts.filter { now.timeIntervalSince($0) < 60 } + [now]
+            guard OnlineAccess.shared.isEnabled, internetAttempts.count <= 20 else {
+                connection.close()
+                return
+            }
+        }
         let session = StreamSession(connection: connection)
         session.onHello = { [weak self, weak session] in
             guard let self, let session, let device = session.deviceID else { return }
@@ -255,6 +278,18 @@ final class AppModel: ObservableObject {
     }
 
     // MARK: - Settings
+
+    func setOnlineAccess(_ enabled: Bool) {
+        UserDefaults.standard.set(enabled, forKey: SettingsKey.onlineAccess)
+        OnlineAccess.shared.setEnabled(enabled)
+        if !enabled {
+            for session in sessions where session.connection.isInternet { session.stop() }
+        }
+    }
+
+    func refreshOnlineAccess() {
+        OnlineAccess.shared.refresh()
+    }
 
     /// Video settings changed: streaming tablets reconnect with the new ones.
     /// Debounced, so clicking through several values costs one restart; tablets

@@ -31,6 +31,7 @@ object Protocol {
     const val CLIPBOARD = 18        // both ways, UTF-8 text
     const val AUDIO = 19            // mac -> tablet, PCM s16le stereo 48 kHz
     const val MOUSE = 27            // tablet -> mac, [kind u8][button u8][a f32][b f32][x f32][y f32] (Mac 0.8+)
+    const val ENDPOINTS = 29        // mac -> tablet, JSON {hosts: [{host, port, udp}]}: the Mac from the internet
     const val TEXT = 28             // tablet -> mac, [action u8][keyCode u16][scanCode u16][flags u8][UTF-8] (Mac 0.8+)
 
     const val SEC_HELLO = 20

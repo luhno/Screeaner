@@ -1,0 +1,5 @@
+0.9.0
+• Use pela internet, direto no seu Mac, sem nenhum servidor no meio
+• O tablet aprende em casa os endereços do Mac e tenta todos ao mesmo tempo
+• Só tablets já pareados entram pela internet, com criptografia de ponta a ponta
+• Campo de IP aceita IPv6 e nomes

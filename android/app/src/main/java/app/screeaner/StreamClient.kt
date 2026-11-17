@@ -126,6 +126,13 @@ class StreamClient(
     @Volatile private var socket: Socket? = null
     /** The socket being connected right now, so stop() can abort the attempt. */
     @Volatile private var attemptSocket: Socket? = null
+    /** Sockets racing to reach the Mac over the internet, also aborted by stop(). */
+    @Volatile private var onlineAttempts: List<Socket> = emptyList()
+    /** The Mac's static key once the handshake proved it (reader thread). */
+    private var macKey: ByteArray? = null
+    /** This connection reached the Mac over the internet. */
+    @Volatile var viaInternet = false
+        private set
     @Volatile private var udpSocket: DatagramSocket? = null
     @Volatile private var decoder: VideoDecoder? = null
     @Volatile private var audio: AudioPlayer? = null
@@ -164,6 +171,7 @@ class StreamClient(
         running = false
         closeQuietly(socket)
         closeQuietly(attemptSocket)
+        onlineAttempts.forEach { closeQuietly(it) }
         udpSocket?.close()
         thread.interrupt()
         if (blocking) awaitStopped()
@@ -311,16 +319,77 @@ class StreamClient(
     private fun candidates(): List<Discovery.Endpoint> {
         val list = ArrayList<Discovery.Endpoint>()
         list += Discovery.Endpoint("127.0.0.1", Protocol.PORT) // USB first: lowest latency
-        manualHost()?.trim()?.takeIf { it.isNotEmpty() }?.let { text ->
-            val host = text.substringBefore(':')
-            val port = text.substringAfter(':', "").toIntOrNull() ?: Protocol.PORT
-            list += Discovery.Endpoint(host, port)
-        }
+        manualHost()?.trim()?.takeIf { it.isNotEmpty() }?.let { list += parseHost(it) }
         // A Mac that marked this tablet as favorite: no need to wait for Bonjour.
         trust.favoriteHost()?.let { list += it }
         list += discovery.endpoints
         val now = System.nanoTime()
         return list.distinct().filter { (badUntil[it] ?: 0L) <= now }
+    }
+
+    /** "host", "host:port", "2804::1", "[2804::1]:27183" or a name (e.g. the router's dynamic DNS). */
+    private fun parseHost(text: String): Discovery.Endpoint {
+        if (text.startsWith("[") && text.contains(']')) {
+            val host = text.substring(1, text.indexOf(']'))
+            val port = text.substringAfter("]:", "").toIntOrNull() ?: Protocol.PORT
+            return Discovery.Endpoint(host, port)
+        }
+        if (text.count { it == ':' } > 1) return Discovery.Endpoint(text, Protocol.PORT) // bare IPv6
+        return Discovery.Endpoint(text.substringBefore(':'), text.substringAfter(':', "").toIntOrNull() ?: Protocol.PORT)
+    }
+
+    /** The Mac's internet addresses not already tried nearby. */
+    private fun onlineCandidates(local: List<Discovery.Endpoint>): List<Discovery.Endpoint> {
+        val now = System.nanoTime()
+        return trust.onlineEndpoints().filter { it !in local && (badUntil[it] ?: 0L) <= now }
+    }
+
+    /**
+     * Tries every internet address at once (IPv6 and IPv4 may each be closed
+     * somewhere) and keeps the first that answers.
+     */
+    private fun connectFirst(endpoints: List<Discovery.Endpoint>, timeoutMs: Int): Pair<Socket, Discovery.Endpoint>? {
+        if (endpoints.isEmpty()) return null
+        val lock = Object()
+        var winner: Pair<Socket, Discovery.Endpoint>? = null
+        var decided = false
+        val finished = CountDownLatch(endpoints.size)
+        val sockets = endpoints.map { Socket() }
+        onlineAttempts = sockets
+        endpoints.forEachIndexed { index, endpoint ->
+            Thread({
+                val socket = sockets[index]
+                try {
+                    socket.tcpNoDelay = true
+                    socket.trafficClass = Protocol.DSCP_EF
+                    socket.connect(InetSocketAddress(endpoint.host, endpoint.port), timeoutMs)
+                    val keep = synchronized(lock) {
+                        if (!decided && winner == null) {
+                            winner = socket to endpoint
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                    if (!keep) closeQuietly(socket)
+                } catch (e: Exception) {
+                    closeQuietly(socket)
+                }
+                finished.countDown()
+            }, "screeaner-online").start()
+        }
+        val deadline = System.nanoTime() + (timeoutMs + 300) * 1_000_000L
+        while (running && System.nanoTime() < deadline && finished.count > 0) {
+            if (synchronized(lock) { winner != null }) break
+            finished.await(25, TimeUnit.MILLISECONDS)
+        }
+        val result = synchronized(lock) {
+            decided = true
+            winner
+        }
+        sockets.forEach { if (it !== result?.first) closeQuietly(it) }
+        onlineAttempts = emptyList()
+        return if (running) result else result?.let { closeQuietly(it.first); null }
     }
 
     private fun run() {
@@ -330,7 +399,8 @@ class StreamClient(
             listener.onState(State.SEARCHING, "")
             var connected: Socket? = null
             var endpoint: Discovery.Endpoint? = null
-            for (candidate in candidates()) {
+            val local = candidates()
+            for (candidate in local) {
                 if (!running) return
                 val attempt = Socket()
                 attemptSocket = attempt
@@ -346,6 +416,16 @@ class StreamClient(
                     closeQuietly(attempt)
                 }
             }
+            viaInternet = false
+            if (connected == null && running) {
+                // Not found nearby: the addresses the Mac gave us for the internet.
+                val online = connectFirst(onlineCandidates(local), ONLINE_CONNECT_TIMEOUT_MS)
+                if (online != null) {
+                    connected = online.first
+                    endpoint = online.second
+                    viaInternet = true
+                }
+            }
             if (connected == null || endpoint == null) {
                 pause(700)
                 continue
@@ -354,7 +434,7 @@ class StreamClient(
             socket = connected
             var outcome = Outcome.FAILED
             try {
-                listener.onState(State.CONNECTING, endpoint.host)
+                listener.onState(State.CONNECTING, if (viaInternet) "internet · ${endpoint.host}" else endpoint.host)
                 outcome = serve(connected)
             } catch (e: Exception) {
                 if (running) Log.w(TAG, "Session ended", e)
@@ -463,6 +543,7 @@ class StreamClient(
             throw GeneralSecurityException("Mac failed to prove its key")
         }
         trust.trust(server.staticPublic, server.name)
+        macKey = server.staticPublic
         socket.soTimeout = 0
         return session
     }
@@ -567,6 +648,16 @@ class StreamClient(
                     Protocol.AUDIO -> audio?.write(plain, 1, size)
 
                     Protocol.CLIPBOARD -> listener.onClipboard(String(plain, 1, size, Charsets.UTF_8))
+
+                    Protocol.ENDPOINTS -> macKey?.let { key ->
+                        val hosts = JSONObject(String(plain, 1, size, Charsets.UTF_8)).optJSONArray("hosts") ?: JSONArray()
+                        val list = (0 until hosts.length()).mapNotNull { i ->
+                            val entry = hosts.optJSONObject(i) ?: return@mapNotNull null
+                            val host = entry.optString("host", "")
+                            if (host.isEmpty()) null else Discovery.Endpoint(host, entry.optInt("port", Protocol.PORT))
+                        }
+                        trust.setOnlineEndpoints(key, list.take(8))
+                    }
 
                     Protocol.UPDATE_OFFER -> {
                         val json = JSONObject(String(plain, 1, size, Charsets.UTF_8))
@@ -864,5 +955,7 @@ class StreamClient(
     private companion object {
         const val TAG = "ScreeanerClient"
         const val UDP_BLOB_HEADER = 12
+        /** Internet round trips are longer than a home network's, and mobile links slower to start. */
+        const val ONLINE_CONNECT_TIMEOUT_MS = 2500
     }
 }
