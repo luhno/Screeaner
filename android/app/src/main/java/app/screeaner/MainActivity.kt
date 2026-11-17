@@ -72,6 +72,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
     private val updatesAsked = HashSet<Int>()
     /** The user accepted but first had to allow installs from this app in Settings. */
     private var updateAfterPermission = false
+    /** A GitHub update accepted before installs from this app were allowed. */
+    private var githubAfterPermission: GitHubUpdate.Release? = null
+    private var optAutoUpdate = true
     private var updateDialog: AlertDialog? = null
     private var refreshRate = 60f
     private var hudMode = HUD_OFF
@@ -435,6 +438,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
         optClipboard = prefs.getBoolean(PREF_CLIPBOARD, true)
         optPalm = prefs.getBoolean(PREF_PALM, true)
         optSidebar = prefs.getBoolean(PREF_SIDEBAR, false)
+        optAutoUpdate = prefs.getBoolean(PREF_AUTO_UPDATE, true)
         // 0.7 had a single "Ctrl works as ⌘" switch.
         val legacyCtrl = if (prefs.getBoolean(PREF_CTRL_CMD, false)) CMD_CTRL else CMD_AUTO
         cmdKey = prefs.getString(PREF_CMD_KEY, null)?.takeIf { it in CMD_VALUES } ?: legacyCtrl
@@ -493,7 +497,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
     }
 
     private fun showOptions() {
-        val values = booleanArrayOf(optAudio, optClipboard, optPalm, optSidebar)
+        val values = booleanArrayOf(optAudio, optClipboard, optPalm, optSidebar, optAutoUpdate)
         AlertDialog.Builder(this)
             .setTitle(R.string.options_title)
             .setMultiChoiceItems(R.array.option_labels, values) { _, index, checked -> values[index] = checked }
@@ -503,10 +507,14 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
                 optClipboard = values[1]
                 optPalm = values[2]
                 optSidebar = values[3]
+                val autoUpdateTurnedOn = values[4] && !optAutoUpdate
+                optAutoUpdate = values[4]
                 prefs.edit()
                     .putBoolean(PREF_AUDIO, optAudio).putBoolean(PREF_CLIPBOARD, optClipboard)
                     .putBoolean(PREF_PALM, optPalm).putBoolean(PREF_SIDEBAR, optSidebar)
+                    .putBoolean(PREF_AUTO_UPDATE, optAutoUpdate)
                     .apply()
+                if (autoUpdateTurnedOn) checkGitHub(force = true)
                 applySidebar()
                 // Audio and clipboard are agreed when connecting.
                 if (reconnect) reconnect()
@@ -1065,6 +1073,13 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
             client?.requestUpdate()
         }
         enterImmersive()
+        githubAfterPermission?.let { release ->
+            if (UpdateInstaller.canInstall(this)) {
+                githubAfterPermission = null
+                installFromGitHub(release)
+            }
+        }
+        checkGitHub(force = false)
         discovery.start()
         clipboardBridge.start()
         inputs.start()
@@ -1317,6 +1332,59 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
             showUpdateDialog(offer)
         }
     }
+
+    // region Updates from GitHub Releases (also away from the Mac)
+
+    private val gitHub by lazy { GitHubUpdate("Screeaner-Android/${appVersion.substringBefore(' ')}") }
+
+    /** At most every few hours, never during a stream (the Mac also pushes updates when connected). */
+    private fun checkGitHub(force: Boolean) {
+        if (!optAutoUpdate || streaming) return
+        val now = System.currentTimeMillis()
+        if (!force && now - prefs.getLong(PREF_UPDATE_CHECKED, 0L) < GITHUB_CHECK_MS) return
+        prefs.edit().putLong(PREF_UPDATE_CHECKED, now).apply()
+        Thread({
+            val release = gitHub.latest() ?: return@Thread
+            if (!GitHubUpdate.isNewer(release.versionName, appVersion)) return@Thread
+            runOnUiThread { offerGitHub(release) }
+        }, "screeaner-github").start()
+    }
+
+    private fun offerGitHub(release: GitHubUpdate.Release) {
+        if (streaming || isFinishing || benchmark != null || updateDialog?.isShowing == true) return
+        updateDialog = AlertDialog.Builder(this)
+            .setTitle(getString(R.string.update_title, release.versionName))
+            .setMessage(getString(R.string.github_update_message, appVersion, (release.size / 1024).toInt()))
+            .setPositiveButton(R.string.update_accept) { _, _ ->
+                if (UpdateInstaller.canInstall(this)) {
+                    installFromGitHub(release)
+                } else {
+                    githubAfterPermission = release
+                    Toast.makeText(this, R.string.update_permission, Toast.LENGTH_LONG).show()
+                    UpdateInstaller.openPermissionSettings(this)
+                }
+            }
+            .setNegativeButton(R.string.update_later, null)
+            .show()
+    }
+
+    private fun installFromGitHub(release: GitHubUpdate.Release) {
+        showNotice(getString(R.string.github_downloading, release.versionName))
+        Thread({
+            val apk = gitHub.download(release, File(cacheDir, "updates"))
+            if (apk == null) {
+                runOnUiThread { showNotice(getString(R.string.github_failed)) }
+                return@Thread
+            }
+            try {
+                UpdateInstaller.install(this, apk)
+            } catch (e: Exception) {
+                runOnUiThread { showNotice(getString(R.string.update_failed, e.message ?: "?")) }
+            }
+        }, "screeaner-github").start()
+    }
+
+    // endregion
 
     private fun showUpdateDialog(offer: StreamClient.UpdateOffer) {
         run {
@@ -1637,6 +1705,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamClient.Listener {
         const val PREF_PALM = "optPalm"
         const val PREF_SIDEBAR = "optSidebar"
         const val PREF_CTRL_CMD = "optCtrlIsCmd"
+        const val PREF_AUTO_UPDATE = "autoUpdate"
+        const val PREF_UPDATE_CHECKED = "githubCheckedAt"
+        const val GITHUB_CHECK_MS = 6 * 3600 * 1000L
         const val PREF_CMD_KEY = "cmdKey"
         const val PREF_TABLET_LAYOUT = "tabletLayout"
         const val PREF_CURSOR_LOCAL = "cursorLocal"

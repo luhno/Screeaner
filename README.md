@@ -44,6 +44,21 @@ Na primeira conexão de cada tablet, **o Mac e o tablet mostram o mesmo código 
 - O código protege contra intermediários: ele é derivado das chaves dos dois lados, com um compromisso que impede um atacante de escolher chaves que gerem o mesmo número.
 - No menu do Mac, **Tablets autorizados** lista os tablets pareados e permite remover cada um. No tablet, *Opções › Esquecer Macs* faz o inverso.
 
+### Atualização automática pelo GitHub
+
+Os dois apps se mantêm atualizados sozinhos a partir dos [Releases](https://github.com/luhno/Screeaner/releases).
+
+**Mac** (ajuste *Atualizar sozinho pelo GitHub*, ligado por padrão)
+- **Quando procura:** pouco depois de abrir e a cada 6 horas.
+- **Conferência:** baixa o `Screeaner-mac.zip` novo e confere duas vezes. Primeiro, o SHA‑256 que o GitHub publica para o arquivo. Depois, a assinatura de código, que precisa ser do mesmo certificado do app instalado.
+- **Instalação:** acontece quando nenhum tablet está transmitindo, ou na hora pelo botão *Instalar agora*. O app reabre sozinho.
+- **Tablets:** como o app do Mac carrega o app do tablet, os tablets são atualizados na próxima conexão.
+
+**Tablet** (*Opções › Atualizar sozinho pelo GitHub*)
+- **Quando procura:** ao abrir, no máximo a cada 6 horas, inclusive longe do Mac.
+- **Conferência:** o download é conferido com o SHA‑256 do GitHub, e o Android só instala por cima um APK com a mesma assinatura.
+- **Confirmação:** o Android sempre pede uma confirmação.
+
 ### Pela internet, sem servidor
 
 Ligue **Acesso pela internet (sem servidor)** no menu do Mac. O tablet passa a conectar direto no Mac de qualquer lugar, sem nenhum serviço no meio: nada de conta, nuvem ou relay. A conexão continua criptografada de ponta a ponta com as chaves do pareamento.

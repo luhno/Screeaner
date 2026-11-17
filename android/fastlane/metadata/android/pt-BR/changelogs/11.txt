@@ -3,3 +3,4 @@
 • O tablet aprende em casa os endereços do Mac e tenta todos ao mesmo tempo
 • Só tablets já pareados entram pela internet, com criptografia de ponta a ponta
 • Campo de IP aceita IPv6 e nomes
+• Atualização automática pelo GitHub, conferida e com a mesma assinatura

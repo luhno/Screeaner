@@ -52,6 +52,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var ipAddresses: [String] = []
     /// Internet access (no server in between): what the router said.
     @Published private(set) var online = OnlineAccess.Status()
+    /// Updates from GitHub Releases.
+    @Published private(set) var update = Updater.State.idle
     /// Recent connection attempts from the internet, to shrug off floods.
     private var internetAttempts: [Date] = []
 
@@ -93,6 +95,16 @@ final class AppModel: ObservableObject {
             if addressesChanged { self.sessions.forEach { $0.sendEndpoints() } }
         }
         OnlineAccess.shared.setEnabled(UserDefaults.standard.bool(forKey: SettingsKey.onlineAccess))
+
+        Updater.shared.onChange = { [weak self] state in
+            guard let self else { return }
+            self.update = state
+            if case .ready(let version) = state, self.liveCount > 0 {
+                self.show("Screeaner v\(version) baixado: instala quando a transmissão terminar")
+            }
+        }
+        Updater.shared.isBusy = { [weak self] in (self?.liveCount ?? 0) > 0 }
+        Updater.shared.start()
 
         server.onError = { [weak self] message in
             DispatchQueue.main.async { self?.show(message, error: true) }
@@ -287,6 +299,14 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func checkForUpdates() {
+        Updater.shared.checkNow()
+    }
+
+    func installUpdate() {
+        Updater.shared.installNow()
+    }
+
     func refreshOnlineAccess() {
         OnlineAccess.shared.refresh()
     }
@@ -371,6 +391,7 @@ final class AppModel: ObservableObject {
 
     private func tick() {
         ticks += 1
+        Updater.shared.installIfIdle()
         if !sessions.isEmpty {
             var lines: [ObjectIdentifier: String] = [:]
             for session in sessions where session.hasStarted && !session.isLegacy {

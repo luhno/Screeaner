@@ -39,6 +39,7 @@ struct MenuView: View {
     @AppStorage(SettingsKey.autoOpenApp) private var autoOpenApp = true
     @AppStorage(SettingsKey.mirrorScreen) private var mirrorScreen = ""
     @AppStorage(SettingsKey.favoritesOnly) private var favoritesOnly = true
+    @AppStorage(SettingsKey.autoUpdate) private var autoUpdate = true
     @State private var showPaired = false
     @State private var contentHeight: CGFloat = 0
 
@@ -88,6 +89,7 @@ struct MenuView: View {
             settings
             onlineSection
             paired
+            updateSection
             if !model.hasScreenPermission || !model.hasInputPermission {
                 permissions
             }
@@ -260,6 +262,53 @@ struct MenuView: View {
         .onChange(of: clipboard) { model.clipboardSettingChanged($0) }
         .onChange(of: mirrorScreen) { _ in model.restartSessions(onlyMirror: true) }
         .onChange(of: autoAdb) { model.autoAdbChanged($0) }
+    }
+
+    /// Updates from GitHub Releases: the switch, the state and what can be done now.
+    private var updateSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            toggleRow("Atualizar sozinho pelo GitHub", isOn: $autoUpdate)
+            HStack(alignment: .center, spacing: 8) {
+                DotMarker(color: updateNeedsAttention ? Dot.signal : Dot.inkSecondary)
+                Text(updateText).font(Dot.text(12)).foregroundStyle(Dot.inkSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 4)
+                switch model.update {
+                case .available:
+                    Button("Baixar e instalar") { model.installUpdate() }.buttonStyle(DotButtonStyle(primary: true))
+                case .ready:
+                    Button("Instalar agora") { model.installUpdate() }.buttonStyle(DotButtonStyle(primary: true))
+                case .checking, .downloading, .installing:
+                    EmptyView()
+                default:
+                    Button("Verificar") { model.checkForUpdates() }.buttonStyle(DotButtonStyle())
+                }
+            }
+        }
+        .onChange(of: autoUpdate) { on in if on { model.checkForUpdates() } }
+    }
+
+    private var updateNeedsAttention: Bool {
+        switch model.update {
+        case .available, .ready, .failed: return true
+        default: return false
+        }
+    }
+
+    private var updateText: String {
+        switch model.update {
+        case .idle: return "v\(Proto.appVersion) · procura versões novas no GitHub"
+        case .checking: return "Procurando versões novas…"
+        case .upToDate(let date): return "v\(Proto.appVersion) é a mais nova · \(date.formatted(date: .omitted, time: .shortened))"
+        case .available(let version): return "v\(version) disponível"
+        case .downloading(let version): return "Baixando a v\(version)…"
+        case .ready(let version):
+            return model.liveCount > 0
+                ? "v\(version) pronta: instala quando a transmissão terminar"
+                : "v\(version) pronta para instalar"
+        case .installing(let version): return "Instalando a v\(version)…"
+        case .failed(let message): return message
+        }
     }
 
     /// Internet access with no server in between: the switch and what the router said.

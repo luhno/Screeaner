@@ -3,3 +3,4 @@
 • The tablet learns the Mac's addresses at home and tries them all at once
 • Only paired tablets get in from the internet, end-to-end encrypted
 • The IP field takes IPv6 and host names
+• Automatic updates from GitHub, checked and with the same signature

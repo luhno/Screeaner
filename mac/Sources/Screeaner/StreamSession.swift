@@ -22,12 +22,14 @@ enum SettingsKey {
     static let favoritesOnly = "favoritesOnly"
     /// Paired tablets may connect from the internet, straight to this Mac (see OnlineAccess).
     static let onlineAccess = "onlineAccess"
+    /// Download and install new versions from GitHub Releases by itself.
+    static let autoUpdate = "autoUpdate"
 
     static func registerDefaults() {
         UserDefaults.standard.register(defaults: [
             hiDPI: true, fps: 60, bitrateMbps: 20, codec: Codec.h264.rawValue, autoAdb: true,
             adaptiveBitrate: true, udpOverWifi: true, clipboard: true, autoOpenApp: true, mirrorScreen: "",
-            favoritesOnly: true, onlineAccess: false,
+            favoritesOnly: true, onlineAccess: false, autoUpdate: true,
         ])
     }
 }

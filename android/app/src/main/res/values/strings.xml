@@ -61,7 +61,11 @@
         <item>Compartilhar área de transferência (texto)</item>
         <item>Ignorar a palma da mão ao usar a caneta</item>
         <item>Barra de atalhos na lateral</item>
+        <item>Atualizar sozinho pelo GitHub</item>
     </string-array>
+    <string name="github_update_message">Há uma versão nova do Screeaner no GitHub (instalada: v%1$s · %2$d KB). O download é conferido com o GitHub e o Android só aceita a mesma assinatura. Ele vai pedir confirmação; o app fecha ao instalar, depois é só abrir de novo.</string>
+    <string name="github_downloading">Baixando a v%1$s do GitHub…</string>
+    <string name="github_failed">Não deu para baixar a atualização do GitHub. Tente de novo mais tarde.</string>
     <string name="options_input">Teclado e trackpad…</string>
     <string name="options_shortcuts">Botões da barra de atalhos…</string>
     <string name="input_title">Teclado, trackpad e mouse</string>

@@ -74,6 +74,21 @@ final class BitrateControllerTests: XCTestCase {
         // Unknown versions are left alone: they cannot install over the air anyway.
         XCTAssertFalse(TabletVersion.isOutdated(tabletVersion: "0.1.0", bundledCode: 6))
     }
+
+    func testAppVersionOrder() {
+        XCTAssertTrue(AppVersion.isNewer("0.10.0", than: "0.9.3"))
+        XCTAssertTrue(AppVersion.isNewer("v1.0", than: "0.9.9"))
+        XCTAssertTrue(AppVersion.isNewer("0.9.1", than: "0.9"))
+        XCTAssertFalse(AppVersion.isNewer("0.9.0", than: "0.9.0"))
+        XCTAssertFalse(AppVersion.isNewer("0.9.0-beta", than: "0.9.0"))
+        XCTAssertFalse(AppVersion.isNewer("0.8.9", than: "0.9.0"))
+    }
+
+    func testBitrateStart() {
+        let controller = BitrateController(maximum: 20_000_000, start: 8_000_000)
+        XCTAssertEqual(controller.current, 8_000_000)
+        XCTAssertEqual(BitrateController(maximum: 5_000_000, start: 8_000_000).current, 5_000_000)
+    }
 }
 
 /// Same known-answer vector as SecureChannelTest on Android (computed with Python `cryptography`).
