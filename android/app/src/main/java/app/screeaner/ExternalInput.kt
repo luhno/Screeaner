@@ -281,7 +281,7 @@ class PointerBridge(private val out: Output) {
                     pinch(event, x, y)
                     return true
                 }
-                MotionEvent.CLASSIFICATION_MULTI_FINGER_SWIPE -> {
+                CLASSIFICATION_MULTI_FINGER_SWIPE -> {
                     multiFingerSwipe(event)
                     return true
                 }
@@ -723,6 +723,8 @@ class PointerBridge(private val out: Output) {
 
     private companion object {
         const val WHEEL_STEP = 0.06f
+        /** MotionEvent's three-or-more-finger trackpad swipe (Android 14), not in the public SDK constants. */
+        const val CLASSIFICATION_MULTI_FINGER_SWIPE = 4
         const val NONE = 0
         const val MOVE = 1
         const val TWO = 2
